@@ -1,0 +1,476 @@
+pro band_combination
+
+  e = ENVI()
+;  csv_fn = "H:\20231207_Altyn\filename.csv"
+;  fn_list = read_csv(csv_fn, count=count)
+;;  frame_list = fn_list.field1
+;  fn_list = fn_list.field1
+;    
+;  stack_list = strarr(count)
+;  MNF_list = strarr(count)
+  
+;  for i = 0, count-1 do begin
+;    basename = file_basename(fn_list[i], '.hdf')
+;    ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;    stack_list[i] = strcompress('H:\20231207_Altyn\ASTER_preprocessed\' + basename + '_pro.dat', /remove_all)
+;    MNF_list[i] = strcompress('H:\20231207_Altyn\ASTER_MNF\' + basename + '_MNF.dat', /remove_all)
+;    ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;    if file_test(stack_list[i]) && file_test(MNF_list[i]) then begin
+;      print, basename + ' exist'
+;    endif else begin
+;      print, basename + ' not exist'
+;    endelse
+    
+;    ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;    out_dir = strcompress('G:\AGRS\20231120_ASTER\Band_Ratio\' + frame_list[i], /remove_all)
+;    ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;    if file_test(out_dir) ne 1 then file_mkdir, out_dir
+    
+    
+    out_dir = "H:\20231207_Altyn\ASTER_mosaic2\Band_Ratio"
+    if file_test(out_dir) ne 1 then file_mkdir, out_dir
+    stack_raster = e.openRaster("H:\20231207_Altyn\ASTER_mosaic2\ASTER_mosaic.dat")
+    MNF_raster = e.openRaster("H:\20231207_Altyn\ASTER_mosaic2\ASTER_mosaic_MNF_rm.dat")
+    
+;    stack_raster = e.openRaster(stack_list[i])
+;    MNF_raster = e.openRaster(MNF_list[i])
+    
+;    features = ['vegetation_and_visible_bands', $
+;      'AlOH_minerals,advanced_argillic_alteration', $
+;      'Clay,amphibole,laterite', $
+;      'Gossan,alteration,host_rock(1)', $
+;      'Gossan,alteration,host_rock(2)', $
+;      'Decorellation', $
+;      'Silica,carbonate,basic_degree_index', $
+;      'Silica,carbonate', $
+;      'Silica', $
+;      'Discrimination_for_mapping', $
+;      'Discrimination_in_sulphide_rich_areas', $
+;      'Discrimination(1)', $
+;      'Discrimination(2)', $
+;      'Silica,Fe2+', $
+;      'Enhanced_structual_features']
+    
+    features = [ $
+      'AlOH_minerals,advanced_argillic_alteration', $
+      'Clay,amphibole,laterite', $
+      'Gossan,alteration,host_rock(1)', $
+      'Decorellation', $
+      'Silica,carbonate,basic_degree_index', $
+      'Discrimination_for_mapping', $
+      'Discrimination_in_sulphide_rich_areas', $
+      'Silica,Fe2+', $
+      'Enhanced_structual_features']
+    
+    basename = 'ASTER_mosaic'
+    forEach feature, features do combine, stack_raster, MNF_raster, basename, feature, out_dir
+   
+    stack_raster.close
+    MNF_raster.close
+    
+;  endfor
+  
+  
+
+end
+
+pro Layer_Stack, INPUT_RASTERS, OUTPUT_RASTER_URI
+
+  ;初始化Task
+  Task = ENVITask('BuildLayerStack')
+  ;设置输入参数
+  Task.INPUT_RASTERS = INPUT_RASTERS
+;  Task.GRID_DEFINITION =
+  Task.RESAMPLING = 'Nearest Neighbor'
+  Task.OUTPUT_RASTER_URI = OUTPUT_RASTER_URI
+  ;执行Task
+  Task.Execute
+  ;获取输出结果
+  OUTPUT_RASTER = Task.OUTPUT_RASTER
+
+end
+
+pro MNF, INPUT_RASTER, OUTPUT_RASTER_URI
+
+  ;初始化Task
+  Task = ENVITask('ForwardMNFTransform')
+  ;设置输入参数
+  Task.INPUT_RASTER = INPUT_RASTER
+  Task.OUTPUT_RASTER_URI = OUTPUT_RASTER_URI
+  ;执行Task
+  Task.Execute
+  ;获取输出结果
+  OUTPUT_RASTER = Task.OUTPUT_RASTER
+
+end
+
+pro combine, stack_raster, MNF_raster, basename, feature_name, out_dir
+
+;  out_path = strcompress(out_dir + '\' + feature_name, /remove_all)
+;  if file_test(out_path) ne 1 then begin
+;    file_mkdir, out_path
+;  endif
+;  o_fn = strcompress(out_path + '\' + basename + '_' + feature_name + '.img')
+  
+  o_fn = strcompress(out_dir + '\' + basename + '_' + feature_name + '.dat')
+
+  if file_test(o_fn) then begin
+    print, o_fn + ' already generated'
+  endif else begin
+    meta = stack_raster.metadata
+    geo = stack_raster.spatialRef
+    ns = stack_raster.nColumns
+    nl = stack_raster.nRows
+    help, ns, nl
+    
+    b1 = float(stack_raster.getData(band=[0]))
+    b2 = float(stack_raster.getData(band=[1]))
+    b3 = float(stack_raster.getData(band=[2]))
+    b4 = float(stack_raster.getData(band=[3]))
+    b5 = float(stack_raster.getData(band=[4]))
+    b6 = float(stack_raster.getData(band=[5]))
+    b7 = float(stack_raster.getData(band=[6]))
+    b8 = float(stack_raster.getData(band=[7]))
+    b9 = float(stack_raster.getData(band=[8]))
+    b10 = float(stack_raster.getData(band=[9]))
+    b11 = float(stack_raster.getData(band=[10]))
+    b12 = float(stack_raster.getData(band=[11]))
+    b13 = float(stack_raster.getData(band=[12]))
+    b14 = float(stack_raster.getData(band=[13]))
+    
+    MNF_b1 = float(MNF_raster.getData(band=[0]))  
+    
+    help, b1
+
+    if feature_name eq 'vegetation_and_visible_bands' then begin
+      R = b3 / b2
+      G = b2
+      B = b1
+      R_info = 'b3 / b2'
+      G_info = 'b2'
+      B_info = 'b1'
+      refer = ''
+    endif
+
+    if feature_name eq 'AlOH_minerals,advanced_argillic_alteration' then begin
+      R = b5 / b6
+      G = b7 / b6
+      B = b7 / b5
+      R_info = 'b5 / b6'
+      G_info = 'b7 / b6'
+      B_info = 'b7 / b5'
+      refer = 'Hewson(CSIRO)'
+    endif
+
+    if feature_name eq 'Clay,amphibole,laterite' then begin
+      R = (b5 * b7) / (b6 * b6)
+      G = b6 / b8
+      B = b4 / b5
+      R_info = '(b5 * b7) / (b6 * b6)'
+      G_info = 'b6 / b8'
+      B_info = 'b4 / b5'
+      refer = 'Bierwith'
+    endif
+
+    if feature_name eq 'Gossan,alteration,host_rock(1)' then begin
+      R = b4 / b2
+      G = b4 / b5
+      B = b5 / b6
+      R_info = 'b4 / b2'
+      G_info = 'b4 / b5'
+      B_info = 'b5 / b6'
+      refer = 'Volesky'
+    endif
+
+    if feature_name eq 'Gossan,alteration,host_rock(2)' then begin
+      R = b6
+      G = b2
+      B = b1
+      R_info = 'b6'
+      G_info = 'b2'
+      B_info = 'b1'
+      refer = ''
+    endif
+
+    if feature_name eq 'Decorellation' then begin
+      R = b13
+      G = b12
+      B = b10
+      R_info = 'b13'
+      G_info = 'b12'
+      B_info = 'b10'
+      refer = 'Bierwith'
+    endif
+
+    if feature_name eq 'Silica,carbonate,basic_degree_index' then begin
+      R = (b11 ^ 2) / b10 / b12
+      G = b13 / b14
+      B = b12 / b13
+      R_info = '(b11 * b11) / b10 / b12'
+      G_info = 'b13 / b14'
+      B_info = 'b12 / b13'
+      refer = 'Bierwith'
+    endif
+
+    if feature_name eq 'Silica,carbonate' then begin
+      R = (b11 ^ 2) / (b10 * b12)
+      G = b13 / b14
+      B = b12 / b13
+      R_info = '(b11 * b11) / (b10 * b12)'
+      G_info = 'b13 / b14'
+      B_info = 'b12 / b13'
+      refer = 'Nimoyima'
+    endif
+
+    if feature_name eq 'Silica' then begin
+      R = b11 / b10
+      G = b11 / b12
+      B = b13 / b10
+      R_info = 'b11 / b10'
+      G_info = 'b11 / b12'
+      B_info = 'b13 / b10'
+      refer = 'CRISO'
+    endif
+
+    if feature_name eq 'Discrimination_for_mapping' then begin
+      R = b4 / b1
+      G = b3 / b1
+      B = b12 / b14
+      R_info = 'b4 / b1'
+      G_info = 'b3 / b1'
+      B_info = 'b12 / b14'
+      refer = 'Abdelsalam'
+    endif
+
+    if feature_name eq 'Discrimination_in_sulphide_rich_areas' then begin
+      R = b12
+      G = b5
+      B = b3
+      R_info = 'b12'
+      G_info = 'b5'
+      B_info = 'b3'
+      refer = ''
+    endif
+
+    if feature_name eq 'Discrimination(1)' then begin
+      R = b4 / b7
+      G = b4 / b1
+      B = (b2 / b3) * (b4 / b3)
+      R_info = 'b4 / b7'
+      G_info = 'b4 / b1'
+      B_info = '(b2 / b3) * (b4 / b3)'
+      refer = 'Sultan'
+    endif
+
+    if feature_name eq 'Discrimination(2)' then begin
+      R = b4 / b7
+      G = b4 / b3
+      B = b2 / b1
+      R_info = 'b4 / b7'
+      G_info = 'b4 / b3'
+      B_info = 'b2 / b1'
+      refer = 'Abrams(USGS)'
+    endif
+
+    if feature_name eq 'Silica,Fe2+' then begin
+      R = b14 / b12
+      G = (b1 / b2) * (b5 / b3)
+      B = MNF_b1
+      R_info = 'b14 / b12'
+      G_info = '(b1 / b2) * (b5 / b3)'
+      B_info = 'MNF b1'
+      refer = 'Rowan(USGS)'
+    endif
+
+    if feature_name eq 'Enhanced_structual_features' then begin
+      R = b7
+      G = b4
+      B = b2
+      R_info = 'b7'
+      G_info = 'b4'
+      B_info = 'b2'
+      refer = 'Rowan(USGS)'
+    endif
+
+    R = normalize(R)
+    G = normalize(G)
+    B = normalize(B)
+    help, R, G, B
+    
+    w1 = where(R eq 0.0)
+    w2 = where(G eq 0.0)
+    w3 = where(B eq 0.0)
+    w = [w1, w2, w3]
+    R[w] = 0.0
+    G[w] = 0.0
+    B[w] = 0.0
+    idx_data = [[[R]], [[G]], [[B]]]
+    help, idx_data
+
+    meta = stack_raster.metadata
+    tags = meta.tags
+    idx_meta = ENVIRasterMetadata()
+    forEach tag, tags do begin
+      if n_elements(meta[tag]) eq 1 then begin
+        idx_meta.addItem, tag, meta[tag]
+      endif
+    endForEach
+    idx_meta.addItem, 'Feature', feature_name
+    idx_meta.addItem, 'Red', R_info
+    idx_meta.addItem, 'Green', G_info
+    idx_meta.addItem, 'Blue', B_info
+    if strlen(refer) gt 0 then idx_meta.addItem, 'Reference', refer
+    if idx_meta.hasTag('DATA IGNORE VALUE') ne 1 then begin
+      idx_meta.addItem, 'DATA IGNORE VALUE', 0.0
+    endif else begin
+      idx_meta.updateItem, 'DATA IGNORE VALUE', 0.0
+    endelse
+    print, idx_meta
+
+
+    print, 'Writing ' + feature_name + ' raster...'
+    idx_raster = ENVIRaster(idx_data, URI=o_fn, spatialRef=geo, metadata=idx_meta, interleave='BSQ')
+    help, idx_raster
+    idx_raster.save
+    idx_raster.close
+    print, 'Done'
+  endelse
+   
+
+end
+
+function normalize, arr
+ 
+  help, arr
+  
+  ne0 = where(arr ne 0.0)
+  eq0 = where(arr eq 0.0)
+  temp = arr[ne0]
+  
+  offset = abs(min(temp)) + 1e-13
+  print, 'offset: ', offset
+  temp = temp + offset
+    
+  ht = histogram(temp, nbins=1000, locations=locations)
+  ht_acc = total(ht, /cumulative) / n_elements(temp)
+  w1 = where(ht_acc ge 0.999)
+  max = locations(w1[0])
+  w2 = where(ht_acc ge 0.001)
+  min = locations(w2[0])
+  print, 'min: ', min, '      max: ', max
+  
+  ltmin = where(temp lt min)
+  gtmax = where(temp gt max)  
+  
+  for i = 0, n_elements(temp)-1 do begin
+    temp[i] = 1000.0 * (temp[i] - min) / (max - min)
+  endfor
+  
+  temp[ltmin] = 1e-13
+  temp[gtmax] = 1000.0
+  arr[ne0] = temp   
+  arr[eq0] = 0.0
+  
+  inf = where(finite(arr) ne 1)
+  arr[inf] = 0.0
+  
+  sz = size(arr)
+  ns = sz[1]
+  nl = sz[2]
+  
+  new_arr = arr
+  
+  for i = 1, ns-2 do begin
+    for j = 1, nl-2 do begin
+      top = arr[i, j-1]
+      bottom = arr[i, j+1]
+      left = arr[i-1, j]
+      right = arr[i+1, j]
+      if arr[i, j] eq 0.0 then begin
+        if mean([top, bottom, left, right]) gt 0.0 then begin
+          new_arr[i, j] = max([top, bottom, left, right])
+        endif
+      endif      
+    endfor
+  endfor
+  
+  return, new_arr
+
+end
+
+
+
+pro remove_background
+
+  e = ENVI()
+  root_dir = 'H:\AGRS\20231107_chen\JabalDamkh2\*'
+  out_dir = 'H:\AGRS\20231107_chen\JabalDamkh_rm\'
+  fn_list = file_search(root_dir, '*.img')
+
+  features = ['vegetation_and_visible_bands', $
+    'AlOH_minerals,advanced_argillic_alteration', $
+    'Clay,amphibole,laterite', $
+    'Gossan,alteration,host_rock(1)', $
+    'Gossan,alteration,host_rock(2)', $
+    'Decorellation', $
+    'Silica,carbonate,basic_degree_index', $
+    'Silica,carbonate', $
+    'Silica', $
+    'Discrimination_for_mapping', $
+    'Discrimination_in_sulphide_rich_areas', $
+    'Discrimination(1)', $
+    'Discrimination(2)', $
+    'Silica,Fe2+', $
+    'Enhanced_structual_features']
+
+  forEach feature, features do begin
+    folder = strcompress(out_dir + feature)
+    if file_test(folder) ne 1 then file_mkdir, folder
+  endforeach
+
+  forEach fn, fn_list do begin
+    basename = file_basename(fn)
+    dirname = (file_dirname(fn)).replace('JabalDamkh2', 'JabalDamkh_rm')
+
+    print, basename
+    o_fn = strcompress(dirname + '\' + basename, /remove_all)
+    raster = e.openRaster(fn)
+    meta = raster.metadata
+    geo = raster.spatialRef
+    interleave = raster.interleave
+    ns = raster.nColumns
+    nl = raster.nRows
+    nb = raster.nBands
+
+    w = []
+
+    for i = 0, nb-1 do begin
+
+      data = raster.getData(band=[i])
+      w1 = where(finite(data) eq 0)
+      w2 = where(data eq 0.0)
+      w = [[w], w1, w2]
+
+    endfor
+
+    data = fltarr(ns, nl, nb)
+    for i = 0, nb-1 do begin
+
+      temp = raster.getData(band=[i])
+      temp[w] = 0.0
+      data[*, *, i] = temp
+
+    endfor
+
+    if meta.hasTag('DATA IGNORE VALUE') THEN BEGIN
+      meta.updateItem, 'DATA IGNORE VALUE', 0.0
+    endif else begin
+      meta.addItem, 'DATA IGNORE VALUE', 0.0
+    endelse
+    new_raster = ENVIRaster(data, URI=o_fn, metadata=meta, spatialRef=geo, interleave=interleave)
+    new_raster.save
+    new_raster.close
+  endforeach
+
+
+end
