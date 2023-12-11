@@ -375,105 +375,109 @@ function AHSI_FLAASH, INPUT_RASTER, OUTPUT_RASTER_URI, CLOUD_RASTER_URI, WATER_R
   print, 'Applying FLAASH...'
   
   if file_test(OUTPUT_RASTER_URI) then begin
-    file_delete, OUTPUT_RASTER_URI
-  endif
-  
-  if file_test(CLOUD_RASTER_URI) then begin
-    file_delete, CLOUD_RASTER_URI
-  endif
-  
-  if file_test(WATER_RASTER_URI) then begin
-    file_delete, WATER_RASTER_URI
-  endif
-  
-  meta = INPUT_RASTER.metadata
-  time = ENVITime(acquisition=INPUT_RASTER.time)
-  help, INPUT_RASTER
-  
-  ;初始化Task
-  Task = ENVITask('FLAASH')
-  ;设置输入参数
-  Task.INPUT_RASTER = INPUT_RASTER
-  Task.SENSOR_TYPE = 'Unknown'
-  Task.INPUT_SCALE = 1
-  Task.OUTPUT_SCALE = 10000
-;  Task.CALIBRATION_FILE = 
-  Task.CALIBRATION_FORMAT = 'FLAASH'
-;  Task.CALIBRATION_UNITS = (Undefined)
-;  Task.LAT_LONG =
-  
-;  print, 'Sensor Altitude', float(meta['SENSOR ALTITUDE'])
-;  print, 'Time', INPUT_RASTER.time
-  
-  Task.SENSOR_ALTITUDE = float(meta['SENSOR ALTITUDE'])
-  Task.DATE_TIME = time
-  
-;  Task.USE_ADJACENCY =
-;  Task.DEFAULT_VISIBILITY =
-;  Task.USE_POLISHING =
-;  Task.POLISHING_RESOLUTION =
-;  Task.SENSOR_AUTOCALIBRATION =
-;  Task.SENSOR_CAL_PRECISION =
-;  Task.SENSOR_CAL_FEATURE_LIST =
-  
-;  Task.GROUND_ELEVATION = 1.0
+    return, e.openRaster(OUTPUT_RASTER_URI)
+  endif else begin
 
-  Task.SOLAR_AZIMUTH = float(meta['SOLAR AZIMUTH'])
-  Task.SOLAR_ZENITH = float(meta['SOLAR ZENITH'])
+    if file_test(CLOUD_RASTER_URI) then begin
+      file_delete, CLOUD_RASTER_URI
+    endif
+
+    if file_test(WATER_RASTER_URI) then begin
+      file_delete, WATER_RASTER_URI
+    endif
+
+    meta = INPUT_RASTER.metadata
+    time =  INPUT_RASTER.time
+;    time = ENVITime(acquisition=INPUT_RASTER.time)
+    help, INPUT_RASTER
+
+    ;初始化Task
+    Task = ENVITask('FLAASH')
+    ;设置输入参数
+    Task.INPUT_RASTER = INPUT_RASTER
+    Task.SENSOR_TYPE = 'Unknown'
+    Task.INPUT_SCALE = 1
+    Task.OUTPUT_SCALE = 10000
+    ;  Task.CALIBRATION_FILE =
+    Task.CALIBRATION_FORMAT = 'FLAASH'
+    ;  Task.CALIBRATION_UNITS = (Undefined)
+    ;  Task.LAT_LONG =
+
+    ;  print, 'Sensor Altitude', float(meta['SENSOR ALTITUDE'])
+    ;  print, 'Time', INPUT_RASTER.time
+
+    Task.SENSOR_ALTITUDE = float(meta['SENSOR ALTITUDE'])
+    Task.DATE_TIME = time
+
+    ;  Task.USE_ADJACENCY =
+    ;  Task.DEFAULT_VISIBILITY =
+    ;  Task.USE_POLISHING =
+    ;  Task.POLISHING_RESOLUTION =
+    ;  Task.SENSOR_AUTOCALIBRATION =
+    ;  Task.SENSOR_CAL_PRECISION =
+    ;  Task.SENSOR_CAL_FEATURE_LIST =
+
+    ;  Task.GROUND_ELEVATION = 1.0
+
+    Task.SOLAR_AZIMUTH = float(meta['SOLAR AZIMUTH'])
+    Task.SOLAR_ZENITH = float(meta['SOLAR ZENITH'])
+
+    ;  Task.LOS_AZIMUTH =
+    ;  Task.LOS_ZENITH =
+    ;  Task.IFOV =
+    ;  Task.MODTRAN_ATM =
+    ;  Task.MODTRAN_AER =
+    ;  Task.MODTRAN_RES =
+    ;  Task.MODTRAN_MSCAT =
+    ;  Task.CO2_MIXING =
+    ;  Task.WATER_ABS_CHOICE =
+    ;  Task.WATER_MULT =
+    ;  Task.WATER_VAPOR_PRESET =
+
+    ;  Task.AEROSOL_MOD = 'High-Visibility Rural'
+    Task.USE_AEROSOL = 'Automatic Selection'
+    Task.AEROSOL_SCALE_HT = 2
+    ;  Task.AER_BAND_RATIO =
+    ;  Task.AER_BAND_WAVL =
+    Task.AER_REFERENCE_VALUE = 0
+    ;  Task.AER_REFERENCE_PIXEL =
+    ;  Task.AER_BANDLOW_WAVL =
+    ;  Task.AER_BANDLOW_MAXREFL =
+    ;  Task.AER_BANDHIGH_WAVL =
+    ;  Task.AER_BANDHIGH_MAXREFL =
+
+    ;  temp_dir = strcompress(file_dirname(OUTPUT_RASTER_URI, /mark_directory) + 'Temp', /remove_all)
+    ;  if file_test(temp_dir) ne 1 then begin
+    ;     file_mkdir, temp_dir
+    ;  endif
+    ;
+    ;  CLOUD_RASTER_URI = strcompress(temp_dir + '\cloud.dat', /remove_all)
+    ;  WATER_RASTER_URI = strcompress(temp_dir + '\water.dat', /remove_all)
+    ;
+    ;  if file_test(CLOUD_RASTER_URI) then begin
+    ;    file_delete, CLOUD_RASTER_URI, /quiet
+    ;  endif
+    ;
+    ;  if file_test(WATER_RASTER_URI) then begin
+    ;    file_delete, WATER_RASTER_URI, /quiet
+    ;  endif
+    ;
+    Task.CLOUD_RASTER_URI = CLOUD_RASTER_URI
+    Task.WATER_RASTER_URI = WATER_RASTER_URI
+    Task.OUTPUT_RASTER_URI = OUTPUT_RASTER_URI
+    ;执行Task
+    Task.Execute
+    ;获取输出结果
+    CLOUD_RASTER = Task.CLOUD_RASTER
+    WATER_RASTER = Task.WATER_RASTER
+    OUTPUT_RASTER = Task.OUTPUT_RASTER
+
+    print, 'done'
+
+    return, OUTPUT_RASTER
+  endelse
   
-;  Task.LOS_AZIMUTH =
-;  Task.LOS_ZENITH =
-;  Task.IFOV =
-;  Task.MODTRAN_ATM =
-;  Task.MODTRAN_AER =
-;  Task.MODTRAN_RES =
-;  Task.MODTRAN_MSCAT =
-;  Task.CO2_MIXING =
-;  Task.WATER_ABS_CHOICE =
-;  Task.WATER_MULT =
-;  Task.WATER_VAPOR_PRESET =
-  
-;  Task.AEROSOL_MOD = 'High-Visibility Rural'
-  Task.USE_AEROSOL = 'Automatic Selection'
-  Task.AEROSOL_SCALE_HT = 2
-;  Task.AER_BAND_RATIO =
-;  Task.AER_BAND_WAVL =
-  Task.AER_REFERENCE_VALUE = 0
-;  Task.AER_REFERENCE_PIXEL =
-;  Task.AER_BANDLOW_WAVL =
-;  Task.AER_BANDLOW_MAXREFL =
-;  Task.AER_BANDHIGH_WAVL =
-;  Task.AER_BANDHIGH_MAXREFL =
-  
-;  temp_dir = strcompress(file_dirname(OUTPUT_RASTER_URI, /mark_directory) + 'Temp', /remove_all)
-;  if file_test(temp_dir) ne 1 then begin
-;     file_mkdir, temp_dir
-;  endif 
-; 
-;  CLOUD_RASTER_URI = strcompress(temp_dir + '\cloud.dat', /remove_all)
-;  WATER_RASTER_URI = strcompress(temp_dir + '\water.dat', /remove_all)
-;  
-;  if file_test(CLOUD_RASTER_URI) then begin
-;    file_delete, CLOUD_RASTER_URI, /quiet
-;  endif
-;  
-;  if file_test(WATER_RASTER_URI) then begin
-;    file_delete, WATER_RASTER_URI, /quiet
-;  endif
-;  
-  Task.CLOUD_RASTER_URI = CLOUD_RASTER_URI
-  Task.WATER_RASTER_URI = WATER_RASTER_URI
-  Task.OUTPUT_RASTER_URI = OUTPUT_RASTER_URI
-  ;执行Task
-  Task.Execute
-  ;获取输出结果
-  CLOUD_RASTER = Task.CLOUD_RASTER
-  WATER_RASTER = Task.WATER_RASTER
-  OUTPUT_RASTER = Task.OUTPUT_RASTER
-  
-  print, 'done'
-  
-  return, OUTPUT_RASTER
+
 
 end
 
