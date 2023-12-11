@@ -19,7 +19,7 @@ pro china_satellites_batch_process_1
   root_dir = 'H:\20231207_Altyn\ZY1F_AHSI'
   out_dir = 'H:\20231207_Altyn\ZY1F_AHSI_processing2'
   
-  steps = ['m', 'rad', 'bil', 'fla', 'cloud', 'water', $
+  steps = ['m', 'rad', 'bil', 'fla', 'cloud', 'water', 'rmBBL', $
     'ortho', 'PCA', 'MNF']
   dirs = []
   forEach step, steps do begin
@@ -40,9 +40,9 @@ pro china_satellites_batch_process_1
   endif
   print, fn_list
   
-  for i = 0, 0 do begin
+  for i = 0, n_elements(fn_list)-1 do begin
     
-    time1 = systime(/seconds)
+    start_time = systime(/seconds)
     
     fn = fn_list[i]
     ext = '.' + (strsplit(fn, '.', /extract))[-1]
@@ -63,7 +63,7 @@ pro china_satellites_batch_process_1
     help, o_fn
     print, o_fn         
     
-    if file_test(o_fn['ortho']) then continue
+    if file_test(o_fn['MNF']) then continue
     
     ;   ENVIOpenChinaRaster会自动识别卫星类型
     raster = read_raster(fn, sav_fn)
@@ -73,7 +73,8 @@ pro china_satellites_batch_process_1
     bil = AHSI_ConvertInterleave(rad, o_fn['bil'])
     fla = AHSI_FLAASH(bil, o_fn['fla'], o_fn['cloud'], o_fn['water'])
     fla = e.openRaster(o_fn['fla'])
-    ortho = AHSI_RPCOrtho(fla, o_fn['ortho'], DEM_fn)
+    rmBBL = remove_BadBand(fla, o_fn['rmBBL'])
+    ortho = AHSI_RPCOrtho(rmBBL, o_fn['ortho'], DEM_fn)
     PCA = PCA_Trans(ortho, o_fn['PCA'])
     MNF = MNF_Trans(ortho, o_fn['MNF'])
 
@@ -84,8 +85,12 @@ pro china_satellites_batch_process_1
     PCA.close
     MNF.close
     
-    time2 = systime(/seconds)
-    print, 'Consume: ' + string((time2 - time1) / 3600.0) + ' h'
+    end_time = systime(/seconds)
+    seconds = end_time - start_time
+    hours = string(fix(seconds / 3600.0))
+    minutes = string(fix((seconds - (hours * 3600.0)) / 60.0))
+    seconds = string(fix(seconds - (hours * 3600.0) - (minutes * 60.0)))
+    print, strcompress('Consume:  ' + hours + 'h' + minutes + 'm' + seconds + 's')
     
   endfor
 
@@ -142,6 +147,8 @@ end
 
 function moment_matching, INPUT_RASTER, OUTPUT_RASTER_URI
 
+  print, 'Moment matching and removing band lines...'
+  
   e = ENVI()
   if file_test(OUTPUT_RASTER_URI) then begin
     return, e.openRaster(OUTPUT_RASTER_URI)
@@ -154,12 +161,12 @@ function moment_matching, INPUT_RASTER, OUTPUT_RASTER_URI
     matched_data = fltarr(ns, nl, nb)
     width = floor(ns / 6)
     if width mod 2 eq 0 then width = width - 1
-    print, width
+    print, 'window width: ', width
     for band = 0, nb-1 do begin
       print, 'Processing band ', band + 1
       data = float(reform(INPUT_RASTER.getData(bands=[band]), ns, nl))
-      matched_data[*, *, band] = repair(data)
-      ;      matched_data[*, *, band] = match(repair(data), width)
+;      matched_data[*, *, band] = repair(data)
+      matched_data[*, *, band] = match(repair(data), width)
     endfor
 
     matched_raster = ENVIRaster(matched_data, URI=OUTPUT_RASTER_URI, spatialRef=geo, metadata=meta, interleave='BSQ')
@@ -477,8 +484,39 @@ function AHSI_FLAASH, INPUT_RASTER, OUTPUT_RASTER_URI, CLOUD_RASTER_URI, WATER_R
     return, OUTPUT_RASTER
   endelse
   
+end
 
+function remove_Badband, INPUT_RASTER, OUTPUT_RASTER_URI
 
+  print, 'Removing Bad Bands...'
+  
+  e = ENVI()
+  if file_test(OUTPUT_RASTER_URI) then begin
+    return, e.openRaster(OUTPUT_RASTER_URI)
+  endif else begin
+    fla_meta = INPUT_RASTER.metadata
+    fla_geo = INPUT_RASTER.spatialRef
+    interleave = INPUT_RASTER.interleave
+    tags = fla_meta.tags
+    bbl = reform(fla_meta['BBL'], n_elements(fla_meta['BBL']))
+    idx = where(bbl eq 1)
+
+    rmBBL_meta = ENVIRasterMetadata()
+    forEach tag, tags do begin
+      value = fla_meta[tag]
+      if n_elements(value) eq 1 then begin
+        rmBBL_meta.addItem, tag, value
+      endif else begin
+        rmBBL_meta.addItem, tag, value[idx]
+      endelse
+    endforeach
+
+    rmBBL = ENVIRaster(INPUT_RASTER.getData(bands=[idx]), URI=OUTPUT_RASTER_URI, metadata=rmBBL_meta, spatialRef=fla_geo, interleave=interleave)
+    rmBBL.save
+
+    return, rmBBL
+  endelse
+  
 end
 
 function AHSI_RPCOrtho, INPUT_RASTER, OUTPUT_RASTER_URI, DEM_fn
