@@ -1,0 +1,628 @@
+pro ASTER_batch_process
+
+  e = ENVI()
+
+  root_dir = 'H:\20231207_Altyn\ASTER_L1T'
+  work_dir = 'H:\20231207_Altyn\ASTER_processing'
+  result_dir = 'H:\20231207_Altyn\ASTER_preprocessed'
+  MNF_dir = 'H:\20231207_Altyn\ASTER_MNF'
+  
+  fn = file_search(root_dir, '*.hdf', count=count)
+  
+;  fn_list = read_csv("H:\AGRS\20230506_aster\ASTER_batch_process_Group1_batch2\no_exsit_list.csv", count=count)
+;  fn = fn_list.field1
+
+  
+  false_list = []
+  time_list = []
+  file_list = []
+  no_exist_list = []
+  
+  steps = ['1_stack', '2_rmEdge', '3_rad', '4_VNSW_BIL', '4_TIR_BIL', '5_fla', '5_cor', '6_stack2']
+  forEach step, steps do begin
+    o_fn = strcompress(work_dir + '\' + step, /remove_all)
+    if file_test(o_fn) ne 1 then file_mkdir, o_fn
+  endforeach
+  
+  
+  
+  for i = 0, count-1 do begin
+    
+;    fn[i] = strjoin([root_dir, '\', fn[i], '.hdf'], '')
+    
+    print, fn[i]
+    basename = file_basename(fn[i], '.hdf')
+
+    print, 'Processing ' + basename + ' ...'
+
+;    VNIR_rad_fn = strcompress(work_dir + '\Radiance\VNIR\' + basename + '_VNIR_rad.dat', /remove_all)
+;    SWIR_rad_fn = strcompress(work_dir + '\Radiance\SWIR\' + basename + '_SWIR_rad.dat', /remove_all)
+;    Stack_fn = strcompress(work_dir + '\Stack\' + basename + '_stack.dat', /remove_all)
+;    BIL_fn = strcompress(work_dir + '\BIL\' + basename + '_BIL.dat', /remove_all) 
+;    removeEdge_fn = strcompress(result_dir + '\' + basename + '_readyForFLAASH.dat', /remove_all)
+;    QUAC_fn = strcompress(work_dir + '\QUAC\' + basename + '_QUAC.dat', /remove_all)
+
+    Stack_fn = strcompress(work_dir + '\1_stack\' + basename + '_stack.dat', /remove_all)
+    rmEdge_fn = strcompress(work_dir + '\2_rmEdge\' + basename + '_rmEdge.dat', /remove_all)
+    rad_fn = strcompress(work_dir + '\3_rad\' + basename + '_rad.dat', /remove_all)
+    VNSW_BIL_fn = strcompress(work_dir + '\4_VNSW_BIL\' + basename + '_VNSW.dat', /remove_all)
+    TIR_BIL_fn = strcompress(work_dir + '\4_TIR_BIL\' + basename + '_TIR.dat', /remove_all)
+    fla_fn = strcompress(work_dir + '\5_fla\' + basename + '_fla.dat', /remove_all)
+    cor_fn = strcompress(work_dir + '\5_cor\' + basename + '_cor.dat', /remove_all)
+    stack2_fn = strcompress(work_dir + '\6_stack2\' + basename + '_stack2.dat', /remove_all)
+    
+    result_fn = strcompress(result_dir + '\' + basename + '_pro.dat', /remove_all)
+    MNF_fn = strcompress(MNF_dir + '\' + basename + '_MNF.dat', /remove_all)
+    
+    if file_test(MNF_fn) then continue
+    if file_test(fn[i]) then begin
+      
+      start_time = systime(/seconds)
+      
+      img = e.OpenRaster(fn[i])
+      help, img
+
+      if n_elements(img) lt 3 then begin
+
+        print, 'False Data!'
+        false_list = [false_list, [basename]]
+
+      endif else begin
+
+        VNIR = img[0]
+        SWIR = img[1]
+        TIR = img[2]
+
+        meta1 = VNIR.metadata
+        meta2 = SWIR.metadata
+        gain1 = meta1['DATA GAIN VALUES']
+        offset1 = meta1['DATA OFFSET VALUES']
+        gain2 = meta2['DATA GAIN VALUES']
+        offset2 = meta2['DATA OFFSET VALUES']
+
+        time = meta1['ACQUISITION TIME']
+        time = ENVITime(ACQUISITION = time)
+        help, time
+
+
+        if n_elements(gain1) eq 3 then begin
+          if n_elements(gain2) ne 6 then begin
+
+            print, 'False Data!'
+            false_list = [false_list, [basename]]
+
+          endif else begin
+
+            time_list = [time_list, [time]]
+            file_list = [file_list, [basename]]
+            
+            stack = Layer_Stack([VNIR, SWIR, TIR], stack_fn)
+            help, stack
+            
+            VNIR.close
+            SWIR.close
+            TIR.close
+                       
+            rmEdge = remove_edge(stack, rmEdge_fn, time)
+            help, rmEdge
+            
+            stack.close
+
+            rad = Radiometric_Calibration(rmEdge, rad_fn)
+            help, rad
+            
+            rmEdge.close
+
+            meta = rad.metadata
+            geo = rad.spatialRef
+            tags = meta.tags
+            
+            VNSW_meta = ENVIRasterMetadata()
+            TIR_meta = ENVIRasterMetadata()
+            forEach tag, tags do begin
+              value = meta[tag]
+              if n_elements(meta[tag]) eq 1 then begin
+                VNSW_meta.addItem, tag, value
+                TIR_meta.addItem, tag, value
+              endif else begin
+                VNSW_meta.addItem, tag, value[0:8]
+                TIR_meta.addItem, tag, value[9:13]
+              endelse
+            endforeach
+            
+            if VNSW_meta.hasTag('DATA IGNORE VALUE') then begin
+              VNSW_meta.updateItem, 'DATA IGNORE VALUE', 0.0
+            endif else begin
+              VNSW_meta.addItem, 'DATA IGNORE VALUE', 0.0
+            endelse
+            if TIR_meta.hasTag('DATA IGNORE VALUE') then begin
+              TIR_meta.updateItem, 'DATA IGNORE VALUE', 0.0
+            endif else begin
+              TIR_meta.addItem, 'DATA IGNORE VALUE', 0.0
+            endelse
+            
+            if file_test(VNSW_bil_fn) then begin
+              VNSW = e.openRaster(VNSW_bil_fn)
+            endif else begin
+              VNSW = ENVIRaster(rad.getData(bands=[0:8]), URI=VNSW_bil_fn, metadata=VNSW_meta, spatialRef=geo, interleave='BIL')
+              VNSW.save
+            endelse
+            
+            if file_test(TIR_bil_fn) then begin
+              TIR = e.openRaster(TIR_bil_fn)
+            endif else begin
+              TIR = ENVIRaster(rad.getData(bands=[9:13]), URI=TIR_bil_fn, metadata=TIR_meta, spatialRef=geo, interleave='BIL')
+              TIR.save
+            endelse
+            
+            help, VNSW, TIR
+            
+            fla = FLAASH(VNSW, fla_fn, time)
+            cor = TIR_AtmosCor(TIR, cor_fn)
+            fla = e.openRaster(fla_fn)
+            cor = e.openRaster(cor_fn)
+            help, fla, cor
+            
+            VNSW.close
+            TIR.close
+            
+            stack2 = Layer_Stack([fla, cor], stack2_fn)
+            help, stack2
+            
+            fla.close
+            cor.close
+            
+            result = remove_edge(stack2, result_fn, time)
+            help, result
+            
+            MNF = MNF(result, MNF_fn)
+            help, MNF
+            
+            result.close
+            MNF.close
+            
+            end_time = systime(/seconds)
+            seconds = end_time - start_time
+            hours = string(fix(seconds / 3600.0))
+            minutes = string(fix((seconds - (hours * 3600.0)) / 60.0))
+            seconds = string(fix(seconds - (hours * 3600.0) - (minutes * 60.0)))
+            print, strcompress('Consume:  ' + hours + 'h' + minutes + 'm' + seconds + 's')
+
+
+          endelse
+
+        endif else begin
+
+          print, 'False Data!'
+          false_list = [false_list, [basename]]
+
+        endelse
+
+      endelse
+      
+    endif else begin
+      
+      print, 'File does not exist!'
+      no_exist_list = [no_exist_list, [basename]]
+      
+    endelse
+
+  
+  endfor
+
+  if n_elements(false_list) gt 0 then begin
+;    print, false_list
+    write_csv, strcompress(result_dir + '\false_list.csv', /remove_all), false_list
+  endif else begin
+    print, 'No false data'
+  endelse
+  
+  if n_elements(no_exist_list) gt 0 then begin
+    ;    print, false_list
+    write_csv, strcompress(result_dir + '\no_exsit_list.csv', /remove_all), no_exist_list
+  endif else begin
+    print, 'All files exist'
+  endelse
+   
+;  time_arr = transpose([[file_list], [time_list]])
+;  header = ['FILE NAME', 'ACQUISITION TIME']
+;  write_csv, strcompress(result_dir + '\time_list.csv', /remove_all), time_arr, header=header
+  
+end
+
+function Layer_Stack, INPUT_RASTERS, OUTPUT_RASTER_URI
+
+  e = ENVI()
+  if file_test(OUTPUT_RASTER_URI) then begin
+    return, e.openRaster(OUTPUT_RASTER_URI)
+  endif else begin
+    ;初始化Task
+    Task = ENVITask('BuildLayerStack')
+    ;设置输入参数
+    Task.INPUT_RASTERS = INPUT_RASTERS
+    ;  Task.GRID_DEFINITION = 'Coord. system + extents + pixel size'
+    Task.RESAMPLING = 'Nearest Neighbor'
+    Task.OUTPUT_RASTER_URI = OUTPUT_RASTER_URI
+    ;执行Task
+    Task.Execute
+    ;获取输出结果
+    return, Task.OUTPUT_RASTER
+  endelse
+
+end
+
+function Radiometric_Calibration, INPUT_RASTER, OUTPUT_RASTER_URI
+
+  e = ENVI()
+  if file_test(OUTPUT_RASTER_URI) then begin
+    return, e.openRaster(OUTPUT_RASTER_URI)
+  endif else begin
+    ;初始化Task
+    Task = ENVITask('RadiometricCalibration')
+    ;设置输入参数
+    Task.INPUT_RASTER = INPUT_RASTER
+    Task.CALIBRATION_TYPE = 'Radiance'
+    ;  Task.OUTPUT_INTERLEAVE = 'BIL'
+    Task.SCALE_FACTOR = 0.10
+    Task.OUTPUT_DATA_TYPE = 'Float'
+    Task.OUTPUT_RASTER_URI = OUTPUT_RASTER_URI
+    ;执行Task
+    Task.Execute
+    ;获取输出结果
+    return, Task.OUTPUT_RASTER
+  endelse
+  
+end
+
+
+function Convert_Interleave, INPUT_RASTER, OUTPUT_RASTER_URI
+
+  e = ENVI()
+  if file_test(OUTPUT_RASTER_URI) then begin
+    return, e.openRaster(OUTPUT_RASTER_URI)
+  endif else begin
+    ;初始化Task
+    Task = ENVITask('ConvertInterleave')
+    ;设置输入参数
+    Task.INPUT_RASTER = INPUT_RASTER
+    Task.INTERLEAVE = 'BIL'
+    Task.OUTPUT_RASTER_URI = OUTPUT_RASTER_URI
+    ;执行Task
+    Task.Execute
+    ;获取输出结果
+    OUTPUT_RASTER = Task.OUTPUT_RASTER
+  endelse
+
+end
+
+function FLAASH, INPUT_RASTER, OUTPUT_RASTER_URI, time
+
+  e = ENVI()
+
+  if file_test(OUTPUT_RASTER_URI) then begin
+    return, e.openRaster(OUTPUT_RASTER_URI)
+  endif else begin
+    meta = INPUT_RASTER.metadata
+;    help, INPUT_RASTER
+
+    ;初始化Task
+    Task = ENVITask('FLAASH')
+    ;设置输入参数
+    Task.INPUT_RASTER = INPUT_RASTER
+    Task.SENSOR_TYPE = 'Unknown'
+    Task.INPUT_SCALE = 1
+    Task.OUTPUT_SCALE = 10000
+    ;  Task.CALIBRATION_FILE =
+    Task.CALIBRATION_FORMAT = 'FLAASH'
+    ;  Task.CALIBRATION_UNITS = (Undefined)
+    ;  Task.LAT_LONG =
+
+    ;  print, 'Sensor Altitude', float(meta['SENSOR ALTITUDE'])
+    ;  print, 'Time', INPUT_RASTER.time
+
+    Task.SENSOR_ALTITUDE = 705.0
+    help, time
+    Task.DATE_TIME = time
+
+    ;  Task.USE_ADJACENCY =
+    ;  Task.DEFAULT_VISIBILITY =
+    ;  Task.USE_POLISHING =
+    ;  Task.POLISHING_RESOLUTION =
+    ;  Task.SENSOR_AUTOCALIBRATION =
+    ;  Task.SENSOR_CAL_PRECISION =
+    ;  Task.SENSOR_CAL_FEATURE_LIST =
+
+    ;  Task.GROUND_ELEVATION = 1.0
+
+;    Task.SOLAR_AZIMUTH = float(meta['SUN AZIMUTH'])
+;    Task.SOLAR_ZENITH = float(meta['SOLAR ZENITH'])
+
+    ;  Task.LOS_AZIMUTH =
+    ;  Task.LOS_ZENITH =
+    ;  Task.IFOV =
+    ;  Task.MODTRAN_ATM =
+    ;  Task.MODTRAN_AER =
+    ;  Task.MODTRAN_RES =
+    ;  Task.MODTRAN_MSCAT =
+    ;  Task.CO2_MIXING =
+    ;  Task.WATER_ABS_CHOICE =
+    ;  Task.WATER_MULT =
+    ;  Task.WATER_VAPOR_PRESET =
+
+    ;  Task.AEROSOL_MOD = 'High-Visibility Rural'
+    Task.USE_AEROSOL = 'Automatic Selection'
+    Task.AEROSOL_SCALE_HT = 2
+    ;  Task.AER_BAND_RATIO =
+    ;  Task.AER_BAND_WAVL =
+    Task.AER_REFERENCE_VALUE = 0
+    ;  Task.AER_REFERENCE_PIXEL =
+    ;  Task.AER_BANDLOW_WAVL =
+    ;  Task.AER_BANDLOW_MAXREFL =
+    ;  Task.AER_BANDHIGH_WAVL =
+    ;  Task.AER_BANDHIGH_MAXREFL =
+
+    ;  temp_dir = strcompress(file_dirname(OUTPUT_RASTER_URI, /mark_directory) + 'Temp', /remove_all)
+    ;  if file_test(temp_dir) ne 1 then begin
+    ;     file_mkdir, temp_dir
+    ;  endif
+    ;
+    ;  CLOUD_RASTER_URI = strcompress(temp_dir + '\cloud.dat', /remove_all)
+    ;  WATER_RASTER_URI = strcompress(temp_dir + '\water.dat', /remove_all)
+    ;
+    ;  if file_test(CLOUD_RASTER_URI) then begin
+    ;    file_delete, CLOUD_RASTER_URI, /quiet
+    ;  endif
+    ;
+    ;  if file_test(WATER_RASTER_URI) then begin
+    ;    file_delete, WATER_RASTER_URI, /quiet
+    ;  endif
+    ;
+;    Task.CLOUD_RASTER_URI = CLOUD_RASTER_URI
+;    Task.WATER_RASTER_URI = WATER_RASTER_URI
+    Task.OUTPUT_RASTER_URI = OUTPUT_RASTER_URI
+    ;执行Task
+    Task.Execute
+    ;获取输出结果
+;    CLOUD_RASTER = Task.CLOUD_RASTER
+;    WATER_RASTER = Task.WATER_RASTER
+    return, Task.OUTPUT_RASTER
+
+;    print, 'done'
+
+    ;  return, OUTPUT_RASTER
+  endelse
+
+;  if file_test(CLOUD_RASTER_URI) then begin
+;    file_delete, CLOUD_RASTER_URI
+;  endif
+;
+;  if file_test(WATER_RASTER_URI) then begin
+;    file_delete, WATER_RASTER_URI
+;  endif
+
+
+
+end
+
+function TIR_AtmosCor, INPUT_RASTER, OUTPUT_RASTER_URI
+
+  e = ENVI()
+  if file_test(OUTPUT_RASTER_URI) then begin
+    return, e.openRaster(OUTPUT_RASTER_URI)
+  endif else begin
+    ;初始化Task
+    Task = ENVITask('ThermalAtmosphericCorrection')
+    ;设置输入参数
+    Task.INPUT_RASTER = INPUT_RASTER
+    Task.DATA_SCALE = 1.0
+    ;  Task.REGRESSION_METHOD =
+    Task.FITTING_TECHNIQUE = 'Normalized Regression'
+    ;  Task.NESR =
+    Task.OUTPUT_RASTER_URI = OUTPUT_RASTER_URI
+    ;执行Task
+    Task.Execute
+    ;获取输出结果
+    OUTPUT_RASTER = Task.OUTPUT_RASTER
+  endelse
+  
+end
+
+
+;pro QUAC, INPUT_RASTER, OUTPUT_RASTER_URI
+;
+;  ;初始化Task
+;  Task = ENVITask('QUAC')
+;  ;设置输入参数
+;  Task.INPUT_RASTER = INPUT_RASTER
+;  Task.SENSOR = 'Generic / Unknown Sensor'
+;  Task.OUTPUT_RASTER_URI = OUTPUT_RASTER_URI
+;  ;执行Task
+;  Task.Execute
+;  ;获取输出结果
+;  OUTPUT_RASTER = Task.OUTPUT_RASTER
+;
+;end
+
+function remove_edge, raster, rmEdge_fn, time
+
+  e = ENVI()
+  if file_test(rmEdge_fn) then begin
+    return, e.openRaster(rmEdge_fn)
+  endif else begin
+    geo = raster.spatialRef
+    meta = raster.metadata
+    ns = raster.nColumns
+    nl = raster.nRows
+    nb = raster.nBands
+    if meta.hasTag('ACQUISITION TIME') ne 1 then begin
+      meta.addItem, 'ACQUISITION TIME', time
+    endif
+    if meta.hasTag('SENSOR TYPE') ne 1 then begin
+      meta.addItem, 'SENSOR TYPE', 'ASTER'
+    endif
+    
+
+    data = fltarr(ns, nb, nl)
+    w = []
+
+    for band = 0, nb-1 do begin
+
+      temp = reform(raster.GetData(bands=[band]), ns, nl)
+      w2 = where(temp le 0.0, /L64)
+      w = [w, [w2]]
+
+    endfor
+
+    w = w[uniq(sort(w))]
+
+    help, w
+    for band = 0, nb-1 do begin
+
+      temp = reform(raster.GetData(bands=[band]), ns, nl)
+      temp[w] = 0.0
+      data[*, band, *] = temp
+
+    endfor
+
+;    print, 'Writing raster...'
+    newraster = ENVIRaster(data, URI=rmEdge_fn, $
+      metadata=meta, interleave='BIL', spatialRef=geo)
+
+    newraster.save
+    
+    return, newRaster
+  endelse
+  
+
+         
+end
+
+function MNF, INPUT_RASTER, OUTPUT_RASTER_URI
+
+  e = ENVI()
+  if file_test(OUTPUT_RASTER_URI) then begin
+    return, e.openRaster(OUTPUT_RASTER_URI)
+  endif else begin
+    ;初始化Task
+    Task = ENVITask('ForwardMNFTransform')
+    ;设置输入参数
+    Task.INPUT_RASTER = INPUT_RASTER
+    Task.OUTPUT_RASTER_URI = OUTPUT_RASTER_URI
+    ;执行Task
+    Task.Execute
+    ;获取输出结果
+    return, Task.OUTPUT_RASTER
+  endelse  
+
+end
+
+;pro PCA
+;
+;  ;初始化Task
+;  Task = ENVITask('ForwardPCATransform')
+;  ;设置输入参数
+;  Task.INPUT_RASTER =
+;  Task.OUTPUT_RASTER_URI =
+;  ;执行Task
+;  Task.Execute
+;  ;获取输出结果
+;  OUTPUT_RASTER = Task.OUTPUT_RASTER
+;
+;end
+
+
+;pro MNF
+;
+;  ;初始化Task
+;  Task = ENVITask('ForwardMNFTransform')
+;  ;设置输入参数
+;  Task.INPUT_RASTER =
+;  Task.OUTPUT_RASTER_URI =
+;  ;执行Task
+;  Task.Execute
+;  ;获取输出结果
+;  OUTPUT_RASTER = Task.OUTPUT_RASTER
+;
+;end
+
+
+; 该函数用于HDF4文件数据集的读取
+function read_hdf4_ds, hdf_path, ds_name  ; 参数hdf_path表示HDF4文件的完整路径, ds_name表示HDF4文件下某一数据集的名称
+  
+  hdf_id = HDF_SD_START(hdf_path, /READ) ; 获取HDF4文件的句柄
+  ds_index = HDF_SD_NAMETOINDEX(hdf_id, ds_name) ; 获取数据集的index
+  ds_id = HDF_SD_SELECT(hdf_id, ds_index) ; 获取数据集的句柄
+  HDF_SD_GETDATA, ds_id, ds_data ; 获取数据集的数据
+  
+  ; 关闭打开的数据集和文件，回收资源
+  HDF_SD_ENDACCESS, ds_id ; 关闭已打开的数据集
+  HDF_SD_end, hdf_id ; 关闭已打开的HDF4文件
+  
+  return, ds_data ; 返回获取的数据集数据
+  
+end
+
+pro hdf_2_dat, fn, VNIR_ofn, SWIR_ofn
+
+    envi_open_file, fn, r_fid=fid
+    envi_file_query, fid, ns=ns, nl=nl, nb=nb, dims=dims, $
+      interleave=interleave, offset=offset, bnames=bnames
+    map_info = envi_get_map_info(fid=fid)
+
+    band_list = ['ImageData1', 'ImageData2', 'ImageData3N', $
+                 'ImageData4', 'ImageData5', 'ImageData6',  $
+                 'ImageData7', 'ImageData8', 'ImageData9']
+    
+    VNIR_template = read_hdf4_ds(fn, 'ImageData1')
+    SWIR_template = read_hdf4_ds(fn, 'ImageData4')
+    
+    sz1 = size(VNIR_template)
+    sz2 = size(SWIR_template)
+    
+    ns1 = sz1[1]
+    nl1 = sz1[2]
+    ns2 = sz2[1]
+    nl2 = sz2[2]
+    
+    VNIR = fltarr(ns1, nl1, 3)
+    SWIR = fltarr(ns2, nl2, 6)
+    
+    for i = 0, 2 do begin
+      VNIR[*, *, i] = read_hdf4_ds(fn, band_list[i])
+    endfor
+    
+    for i = 3, 8 do begin
+      SWIR[*, *, i] = read_hdf4_ds(fn, band_list[i])
+    endfor
+      
+    
+    envi_write_envi_file, VNIR, out_name=VNIR_ofn, ns=ns, nl=nl, nb=3, $
+    data_type=4, interleave=interleave, offset=offset, $
+      bnames=bnames, map_info=map_info
+      
+    envi_write_envi_file, SWIR, out_name=SWIR_ofn, ns=ns, nl=nl, nb=6, $
+      data_type=4, interleave=interleave, offset=offset, $
+      bnames=bnames, map_info=map_info
+
+end
+
+function def_dir, work_dir, basename
+
+  dir_list = []
+  
+  
+  work_dir = dialog_pickfile(title='Please choose the folder for saving procedure files')
+  
+  VNIR_rad_fn = strcompress(work_dir + '\Radiance\VNIR\' + basename + '_VNIR_rad.dat', /remove_all)
+  SWIR_rad_fn = strcompress(work_dir + '\Radiance\SWIR' + basename + '_SWIR_rad.dat', /remove_all)
+  VNIR_SWIR_Stack_fn = strcompress(work_dir + '\Stack\' + basename + '_stack.dat', /remove_all)
+  VNIR_SWIR_Stack_BIL_fn = strcompress(work_dir + '\Stack_BIL\' + basename + '_stack_BIL.dat', /remove_all)
+  QUAC_fn = strcompress(work_dir + '\QUAC\' + basename + '_QUAC.dat', /remove_all)
+  
+  return, dir_list
+
+
+end
+
+
+
