@@ -1,0 +1,798 @@
+pro china_satellites_batch_process_1
+
+; ENVI version 5.7 or newer is needed
+; Launch with [ENVI x.x + IDL x.x] linkage pattern
+; Apply to AHSI sensor (GF5 / GF5B / ZY1E / ZY1F)
+; Include: 
+; [1] Moment Matching and Badline Removal
+; [2] Radiometric Calibration
+; [3] Convert Interleave (BSQ to BIL)
+; [4] FLAASH Atmospheric Correction
+; [5] RPC Orthorectification
+; [6] PCA Transformation
+; [7] MNF Transformation
+
+  e = ENVI()
+  sav_fn = "D:\SOFTWARE\ENVI57\ENVI57\extensions\ChinaSatellitesSupport\envi_china_satellites_support.sav"
+  DEM_fn = "D:\SOFTWARE\ENVI57\ENVI57\data\GMTED2010.jp2"
+  
+  root_dir = 'H:\20231207_Altyn\ZY1F_AHSI'
+  out_dir = 'H:\20231207_Altyn\ZY1F_AHSI_processing2'
+  
+  steps = ['m', 'rad', 'bil', 'fla', 'cloud', 'water', $
+    'ortho', 'PCA', 'MNF']
+  dirs = []
+  forEach step, steps do begin
+    dir = strcompress(out_dir + '\' + step, /remove_all)
+    dirs = [dirs, [dir]]
+    if file_test(dir) then begin
+      print, 'outpath: ' + dir + ' already exists'
+    endif else begin
+      file_mkdir, dir
+      print, 'outpath: ' + dir + ' has been created'
+    endelse
+  endforeach
+  help, dirs
+ 
+  fn_list = findXMLFiles(root_dir)
+  if n_elements(fn_list) eq 0 then begin
+    fn_list = file_search(root_dir, '*.{dat,img}')
+  endif
+  print, fn_list
+  
+  for i = 0, 0 do begin
+    
+    time1 = systime(/seconds)
+    
+    fn = fn_list[i]
+    ext = '.' + (strsplit(fn, '.', /extract))[-1]
+    print, ext
+    basename = file_basename(fn, ext)
+    base_str = strsplit(basename, '_', /extract)
+    print, base_str
+    basename = strjoin(base_str[0:4], '_')
+    
+    fns = list()
+    for j = 0, n_elements(dirs)-1 do begin
+      dir = dirs[j]
+      postfix = '_' + steps[j] + '.dat'
+      fns.add, strcompress(dir + '\' + basename + postfix, /remove_all)
+    endfor
+    help, fns
+    o_fn = hash(steps, fns)
+    help, o_fn
+    print, o_fn         
+    
+    if file_test(o_fn['ortho']) then continue
+    
+    ;   ENVIOpenChinaRaster会自动识别卫星类型
+    raster = read_raster(fn, sav_fn)
+    
+    m = moment_matching(raster, o_fn['m'])
+    rad = AHSI_RadioCali(m, o_fn['rad'])
+    bil = AHSI_ConvertInterleave(rad, o_fn['bil'])
+    fla = AHSI_FLAASH(bil, o_fn['fla'], o_fn['cloud'], o_fn['water'])
+    fla = e.openRaster(o_fn['fla'])
+    ortho = AHSI_RPCOrtho(fla, o_fn['ortho'], DEM_fn)
+    PCA = PCA_Trans(ortho, o_fn['PCA'])
+    MNF = MNF_Trans(ortho, o_fn['MNF'])
+
+    rad.close
+    bil.close
+    fla.close
+    ortho.close
+    PCA.close
+    MNF.close
+    
+    time2 = systime(/seconds)
+    print, 'Consume: ' + string((time2 - time1) / 3600.0) + ' h'
+    
+  endfor
+
+end
+
+function read_raster, fn, sav_fn
+
+  e = ENVI()
+  Restore, sav_fn
+  ext = (strsplit(fn, '.', /extract))[-1]
+  if ext eq 'dat' or ext eq 'img' then begin
+    return, e.openRaster(fn)
+  endif else if ext eq 'xml' then begin
+    src = ENVIOpenChinaRaster(fn)
+    vn = src[1]
+    sw = src[2]
+    vn.close
+    sw.close
+    raster = src[0]
+    return, raster
+  endif else begin
+    print, 'Failed to open. Please present standard ENVIRaster[*.dat/*.img] or [*.xml] file of China Satellites'
+    return, 0
+  endelse
+
+end
+
+function FindXMLFiles, root_dir
+  ; 初始化一个字符串数组来存储找到的文件名
+  xml_files = []
+
+  ; 获取当前目录下的所有文件
+  files = File_Search(root_dir + '/*', '*.xml', COUNT=file_count)
+
+  ; 遍历当前目录下的所有文件
+  for i = 0, file_count-1 do begin
+    file_path = files[i]
+;    ext = strsplit(file_path, '.', /extract)
+;    print, ext
+;    ext = ext[-1]
+;    print, ext
+    ; 检查文件是否以 '.xml' 后缀结尾且文件名中不包含 'Check' 字符串
+    if (StrPos(files[i], 'Check')) eq -1 and (StrPos(files[i], 'describe')) eq -1then begin
+;      if (StrPos(files[i], 'MSS')) ne -1 or (StrPos(files[i], 'PAN')) ne -1 then begin
+      ; 添加符合条件的文件名到结果数组
+      xml_files = [xml_files, files[i]]
+;      endif
+    endif
+  endfor
+
+  ; 返回找到的XML文件名数组
+  return, xml_files
+end
+
+function moment_matching, INPUT_RASTER, OUTPUT_RASTER_URI
+
+  e = ENVI()
+  if file_test(OUTPUT_RASTER_URI) then begin
+    return, e.openRaster(OUTPUT_RASTER_URI)
+  endif else begin
+    meta = INPUT_RASTER.metadata
+    geo = INPUT_RASTER.spatialRef
+    ns = INPUT_RASTER.nColumns
+    nl = INPUT_RASTER.nRows
+    nb = INPUT_RASTER.nBands
+    matched_data = fltarr(ns, nl, nb)
+    width = floor(ns / 6)
+    if width mod 2 eq 0 then width = width - 1
+    print, width
+    for band = 0, nb-1 do begin
+      print, 'Processing band ', band + 1
+      data = float(reform(INPUT_RASTER.getData(bands=[band]), ns, nl))
+      matched_data[*, *, band] = repair(data)
+      ;      matched_data[*, *, band] = match(repair(data), width)
+    endfor
+
+    matched_raster = ENVIRaster(matched_data, URI=OUTPUT_RASTER_URI, spatialRef=geo, metadata=meta, interleave='BSQ')
+    matched_raster.save
+    return, matched_raster
+  endelse
+
+end
+
+function match, arr, width
+
+  sz = size(arr)
+  ns = sz[1]
+  nl = sz[2]
+
+  radius = (width - 1) / 2
+  window = fltarr(width, nl)
+  miu = fltarr(ns - 2 * radius)
+  for i = radius, ns-radius-1 do begin
+    window = arr[i-radius:i+radius, *]
+    stats = cal_stats(window, width)
+    miu_ref = stats.mean_ref
+    sigma_ref = stats.std_ref
+    miu = stats.mean
+    sigma = stats.std
+    for j = 0, width-1 do begin
+      gain = sigma_ref / sigma[j]
+      offset = miu_ref - ((sigma_ref / sigma[j]) * miu[j])
+      window[j, *] = gain * window[j, *] + offset
+    endfor
+  endfor
+
+  return, arr
+
+end
+
+function cal_stats, window, width
+
+  miu_sum = 0.0
+  sigma_sum = 0.0
+  miu = []
+  sigma = []
+
+  for j = 0, width-1 do begin
+
+    column = window[j, *]
+    ht = histogram(column, nbins=200, locations=locations)
+    ht_acc = total(ht, /cumulative) / n_elements(column)
+    w1 = where(ht_acc ge 0.99)
+    max = locations(w1[0])
+    w2 = where(ht_acc ge 0.01)
+    min = locations(w2[0])
+
+    w = where(column gt min and column lt max)
+    temp = column[w]
+    miu = [miu, [mean(temp)]]
+    sigma = [sigma, [stddev(temp)]]
+    miu_sum += mean(temp)
+    sigma_sum += stddev(temp)
+
+  endfor
+
+  miu_ref = miu_sum / float(width)
+  sigma_ref = sigma_sum / float(width)
+
+  ;  keys = ['mean_ref', 'std_ref', 'mean', 'std']
+  ;  values = [miu_ref, sigma_ref, [miu], [sigma]]
+
+  return, {mean_ref: miu_ref, std_ref: sigma_ref, mean: miu, std: sigma}
+
+end
+
+function repair, data
+
+  sz = size(data)
+  ns = sz[1]
+  nl = sz[2]
+
+  kernel1 = [[-1, 0, 1], $
+    [-2, 0, 2], $
+    [-1, 0, 1]]
+
+  kernel2 = [[1, 0, 1], $
+    [0, 0, 0], $
+    [-1, 0, -1]]
+
+  filtered1 = convol(data, kernel1, /normalize, /edge_truncate)
+  filtered2 = convol(data, kernel2, /normalize, /edge_truncate)
+  filtered = abs(filtered1 + filtered2)
+
+  badline_map = fltarr(ns, nl)
+  badline_list = [0]
+
+  ht = histogram(filtered, nbins=200, locations=locations)
+  ht_acc = total(ht, /cumulative) / n_elements(filtered)
+  ;print, 'ht_acc', ht_acc
+
+  w = where(ht_acc ge 0.8)
+  threshold = locations(w[0])
+  ;  print, 'threshold: ', threshold
+
+  for i = 0, ns-1 do begin
+    num = 0
+    for j = 0, nl-1 do begin
+      if filtered[i, j] ge threshold then begin
+        num += 1
+      endif
+    endfor
+    if float(num) / float(nl) ge 0.4 then begin
+      badline_map[i, *] = 255
+      badline_list = [badline_list, [i]]
+    endif else begin
+      badline_map[i, *] = 0
+    endelse
+  endfor
+
+
+  for i = 0, n_elements(badline_list)-1 do begin
+
+    c = badline_list[i] ; c: column
+    if c le ns/2 then begin
+      if c ge 10 then left_len = 10
+      if c lt 10 then left_len = c
+      right_len = 20 - left_len
+    endif else if c gt ns/2 then begin
+      if ns-c-1 ge 10 then right_len = 10
+      if ns-c-1 lt 10 then right_len = ns-c-1
+      left_len = 20 - right_len
+    endif
+    ;  print, c, left_len, right_len
+
+
+    for j = 0, nl-1 do begin
+      data[c, j] = median(data[c-left_len:c+right_len, j:j])
+    endfor
+
+  endfor
+
+  w = where(finite(data) eq 0)
+  data[w] = 0.0
+  ;  coll = {badline_map : badline_map, $
+  ;    filtered    : filtered,    $
+  ;    result      : data,        $
+  ;    badline_list : badline_list}
+
+  return, data
+
+end
+
+
+function AHSI_RadioCali, INPUT_RASTER, OUTPUT_RASTER_URI
+
+  print, 'Applying radiometric calibration...'
+  
+  e = ENVI()
+  
+  if file_test(OUTPUT_RASTER_URI) then begin
+    return, e.openRaster(OUTPUT_RASTER_URI)
+  endif else begin
+    ;初始化Task
+    Task = ENVITask('RadiometricCalibration')
+    ;设置输入参数
+    Task.INPUT_RASTER = INPUT_RASTER
+    Task.CALIBRATION_TYPE = 'Radiance'
+    Task.SCALE_FACTOR = 0.1
+    Task.OUTPUT_DATA_TYPE = 'Float'
+    Task.OUTPUT_RASTER_URI = OUTPUT_RASTER_URI
+    ;执行Task
+    Task.Execute
+    ;获取输出结果
+    OUTPUT_RASTER = Task.OUTPUT_RASTER
+
+    print, 'done'
+
+    return, OUTPUT_RASTER
+  endelse
+  
+
+
+end
+
+function AHSI_ConvertInterleave, INPUT_RASTER, OUTPUT_RASTER_URI
+
+  print, 'Converting interleave...'
+  
+  e = ENVI()
+  if file_test(OUTPUT_RASTER_URI) then begin
+    return, e.openRaster(OUTPUT_RASTER_URI)
+  endif else begin
+    ;初始化Task
+    Task = ENVITask('ConvertInterleave')
+    ;设置输入参数
+    Task.INPUT_RASTER = INPUT_RASTER
+    Task.INTERLEAVE = 'BIL'
+    Task.OUTPUT_RASTER_URI = OUTPUT_RASTER_URI
+    ;执行Task
+    Task.Execute
+    ;获取输出结果
+    OUTPUT_RASTER = Task.OUTPUT_RASTER
+
+    print, 'done'
+
+    return, OUTPUT_RASTER
+  endelse
+  
+
+
+END
+
+function AHSI_FLAASH, INPUT_RASTER, OUTPUT_RASTER_URI, CLOUD_RASTER_URI, WATER_RASTER_URI
+
+  e = ENVI()
+  print, 'Applying FLAASH...'
+  
+  if file_test(OUTPUT_RASTER_URI) then begin
+    file_delete, OUTPUT_RASTER_URI
+  endif
+  
+  if file_test(CLOUD_RASTER_URI) then begin
+    file_delete, CLOUD_RASTER_URI
+  endif
+  
+  if file_test(WATER_RASTER_URI) then begin
+    file_delete, WATER_RASTER_URI
+  endif
+  
+  meta = INPUT_RASTER.metadata
+  time = ENVITime(acquisition=INPUT_RASTER.time)
+  help, INPUT_RASTER
+  
+  ;初始化Task
+  Task = ENVITask('FLAASH')
+  ;设置输入参数
+  Task.INPUT_RASTER = INPUT_RASTER
+  Task.SENSOR_TYPE = 'Unknown'
+  Task.INPUT_SCALE = 1
+  Task.OUTPUT_SCALE = 10000
+;  Task.CALIBRATION_FILE = 
+  Task.CALIBRATION_FORMAT = 'FLAASH'
+;  Task.CALIBRATION_UNITS = (Undefined)
+;  Task.LAT_LONG =
+  
+;  print, 'Sensor Altitude', float(meta['SENSOR ALTITUDE'])
+;  print, 'Time', INPUT_RASTER.time
+  
+  Task.SENSOR_ALTITUDE = float(meta['SENSOR ALTITUDE'])
+  Task.DATE_TIME = time
+  
+;  Task.USE_ADJACENCY =
+;  Task.DEFAULT_VISIBILITY =
+;  Task.USE_POLISHING =
+;  Task.POLISHING_RESOLUTION =
+;  Task.SENSOR_AUTOCALIBRATION =
+;  Task.SENSOR_CAL_PRECISION =
+;  Task.SENSOR_CAL_FEATURE_LIST =
+  
+;  Task.GROUND_ELEVATION = 1.0
+
+  Task.SOLAR_AZIMUTH = float(meta['SOLAR AZIMUTH'])
+  Task.SOLAR_ZENITH = float(meta['SOLAR ZENITH'])
+  
+;  Task.LOS_AZIMUTH =
+;  Task.LOS_ZENITH =
+;  Task.IFOV =
+;  Task.MODTRAN_ATM =
+;  Task.MODTRAN_AER =
+;  Task.MODTRAN_RES =
+;  Task.MODTRAN_MSCAT =
+;  Task.CO2_MIXING =
+;  Task.WATER_ABS_CHOICE =
+;  Task.WATER_MULT =
+;  Task.WATER_VAPOR_PRESET =
+  
+;  Task.AEROSOL_MOD = 'High-Visibility Rural'
+  Task.USE_AEROSOL = 'Automatic Selection'
+  Task.AEROSOL_SCALE_HT = 2
+;  Task.AER_BAND_RATIO =
+;  Task.AER_BAND_WAVL =
+  Task.AER_REFERENCE_VALUE = 0
+;  Task.AER_REFERENCE_PIXEL =
+;  Task.AER_BANDLOW_WAVL =
+;  Task.AER_BANDLOW_MAXREFL =
+;  Task.AER_BANDHIGH_WAVL =
+;  Task.AER_BANDHIGH_MAXREFL =
+  
+;  temp_dir = strcompress(file_dirname(OUTPUT_RASTER_URI, /mark_directory) + 'Temp', /remove_all)
+;  if file_test(temp_dir) ne 1 then begin
+;     file_mkdir, temp_dir
+;  endif 
+; 
+;  CLOUD_RASTER_URI = strcompress(temp_dir + '\cloud.dat', /remove_all)
+;  WATER_RASTER_URI = strcompress(temp_dir + '\water.dat', /remove_all)
+;  
+;  if file_test(CLOUD_RASTER_URI) then begin
+;    file_delete, CLOUD_RASTER_URI, /quiet
+;  endif
+;  
+;  if file_test(WATER_RASTER_URI) then begin
+;    file_delete, WATER_RASTER_URI, /quiet
+;  endif
+;  
+  Task.CLOUD_RASTER_URI = CLOUD_RASTER_URI
+  Task.WATER_RASTER_URI = WATER_RASTER_URI
+  Task.OUTPUT_RASTER_URI = OUTPUT_RASTER_URI
+  ;执行Task
+  Task.Execute
+  ;获取输出结果
+  CLOUD_RASTER = Task.CLOUD_RASTER
+  WATER_RASTER = Task.WATER_RASTER
+  OUTPUT_RASTER = Task.OUTPUT_RASTER
+  
+  print, 'done'
+  
+  return, OUTPUT_RASTER
+
+end
+
+function AHSI_RPCOrtho, INPUT_RASTER, OUTPUT_RASTER_URI, DEM_fn
+  
+  print, 'Applying RPC orthorectification...'
+  
+  e = ENVI()
+  
+  dem = e.openRaster(DEM_fn)
+  
+  if file_test(OUTPUT_RASTER_URI) then begin
+    return, e.openRaster(OUTPUT_RASTER_URI)
+  endif else begin
+    ;初始化Task
+    Task = ENVITask('RPCOrthorectification')
+    ;设置输入参数
+    Task.INPUT_RASTER = INPUT_RASTER
+    Task.DEM_RASTER = dem
+    ;  Task.INPUT_GCP =
+    ;  Task.GEOID_OFFSET =
+    ;  Task.DEM_IS_HEIGHT_ABOVE_ELLIPSOID =
+    ;  Task.OUTPUT_COORDINATE_SYSTEM =
+    ;  Task.OUTPUT_PIXEL_SIZE =
+    Task.RESAMPLING = 'Nearest Neighbor'
+    ;  Task.GRID_SPACING =
+    ;  Task.OUTPUT_SUBSET =
+    Task.OUTPUT_RASTER_URI = OUTPUT_RASTER_URI
+    ;执行Task
+    Task.Execute
+    dem.close
+    ;获取输出结果
+    return, Task.OUTPUT_RASTER
+  endelse
+  
+  
+;  if file_test(OUTPUT_RASTER_URI2) then begin
+;    file_delete, OUTPUT_RASTER_URI2
+;  endif
+  
+
+  
+;  print, 'Removing background...'
+;  
+;  data = OUTPUT_RASTER.getData()
+;  meta = OUTPUT_RASTER.metadata
+;  geo = OUTPUT_RASTER.spatialRef
+;  interleave = meta['interleave']
+;  
+;  if meta.hasTag('DATA IGNORE VALUE') then begin
+;    meta.updateItem, 'DATA IGNORE VALUE', 0.0
+;  endif else begin
+;    meta.addItem, 'DATA IGNORE VALUE', 0.0
+;  endelse
+;  
+;  ortho = ENVIRaster(data, URI=OUTPUT_RASTER_URI2, metadata=meta, interleave=interleave, spatialRef=geo)
+;  ortho.save
+;  
+;  OUTPUT_RASTER.close
+;;  ortho.close
+;  dem.close
+;  
+;  print, 'done'
+;  
+;  return, ortho
+end
+
+
+function PCA_Trans, INPUT_RASTER, OUTPUT_RASTER_URI
+
+  e = ENVI()
+  if file_test(OUTPUT_RASTER_URI) then begin
+    return, e.openRaster(OUTPUT_RASTER_URI)
+  endif else begin
+    ;初始化Task
+    Task = ENVITask('ForwardPCATransform')
+    ;设置输入参数
+    Task.INPUT_RASTER = INPUT_RASTER
+    Task.OUTPUT_RASTER_URI = OUTPUT_RASTER_URI
+    ;执行Task
+    Task.Execute
+    ;获取输出结果
+    return, Task.OUTPUT_RASTER
+  endelse  
+
+end
+
+function MNF_Trans, INPUT_RASTER, OUTPUT_RASTER_URI
+
+  e = ENVI()
+  if file_test(OUTPUT_RASTER_URI) then begin
+    return, e.openRaster(OUTPUT_RASTER_URI)
+  endif else begin
+    ;初始化Task
+    Task = ENVITask('ForwardMNFTransform')
+    ;设置输入参数
+    Task.INPUT_RASTER = INPUT_RASTER
+    Task.OUTPUT_RASTER_URI = OUTPUT_RASTER_URI
+    ;执行Task
+    Task.Execute
+    ;获取输出结果
+    return, Task.OUTPUT_RASTER
+  endelse
+  
+end
+function PanSharpening, MSS, PAN, OUTPUT_RASTER_URI
+
+  print, 'Applying Gram-Schmidt PanSharpening...'
+  e = ENVI()
+  
+  if file_test(OUTPUT_RASTER_URI) then begin
+    return, e.openRaster(OUTPUT_RASTER_URI)
+  endif else begin
+    ;初始化Task
+    Task = ENVITask('GramSchmidtPanSharpening')
+    ;设置输入参数
+    Task.INPUT_LOW_RESOLUTION_RASTER = MSS
+    Task.INPUT_HIGH_RESOLUTION_RASTER = PAN
+    ;  Task.SENSOR =
+    Task.RESAMPLING = 'Nearest Neighbor'
+    Task.OUTPUT_RASTER_URI = OUTPUT_RASTER_URI
+    ;执行Task
+    Task.Execute
+    ;获取输出结果
+    return, Task.OUTPUT_RASTER
+  endelse
+  
+
+
+end
+
+function AHSI_cloudMask, img, mask
+
+  e = ENVI()
+  masked_value = 0.0
+
+  ;  data = img.getData()
+  ns = img.nColumns
+  nl = img.nRows
+  nb = img.nBands
+  meta = img.metadata
+  interleave = meta['interleave']
+  
+  mask = mask.getData()
+
+
+  if interleave eq 'bsq' then begin
+    new_data = fltarr(ns, nl, nb) ; BSQ
+    dimension = 3
+    w2 = where(mask eq 1)
+    print, 'Applying cloud mask...'
+    for band = 0, nb-1 do begin
+      temp = img.getData(bands=[band])
+      temp[w2] = masked_value
+      new_data[*, *, band] = temp
+    endfor
+  endif
+
+  if interleave eq 'bil' then begin
+    new_data = fltarr(ns, nb, nl) ; BIL
+    dimension = 2
+    w2 = where(mask eq 1)
+    print, 'Applying cloud mask...'
+    for band = 0, nb-1 do begin
+      temp = img.getData(bands=[band])
+      temp[w2] = masked_value
+      new_data[*, band, *] = temp
+    endfor
+  endif
+
+  if interleave eq 'bip' then begin
+    new_data = fltarr(nb, ns, nl) ; BIP
+    dimension = 1
+    w2 = where(mask eq 1)
+    print, 'Applying cloud mask...'
+    for band = 0, nb-1 do begin
+      temp = img.getData(bands=[band])
+      temp[w2] = masked_value
+      new_data[band, *, *] = temp
+    endfor
+  endif
+
+  return, new_data
+
+end
+
+
+
+function cloud_mask1, img1=img1;, ns=ns, nl=nl, nb=nb, interleave1=interleave1
+
+
+  print, 'Reading image as array...'
+  e = ENVI()
+  masked_value = 0.0
+
+;  data = img1.getData()
+  ns = img1.nColumns
+  nl = img1.nRows
+  nb = img1.nBands
+  meta = img1.metadata
+  interleave1 = meta['interleave']
+  
+
+  if interleave1 eq 'bsq' then begin
+    new_data = fltarr(ns, nl, nb) ; BSQ
+    dimension = 3
+    w2 = get_cloud_location(img1, dimension)
+    print, 'Applying cloud mask...'
+    for band = 0, nb-1 do begin
+      temp = img1.getData(bands=[band])
+      temp[w2] = masked_value
+      new_data[*, *, band] = temp
+    endfor
+  endif
+
+  if interleave1 eq 'bil' then begin
+    new_data = fltarr(ns, nb, nl) ; BIL
+    dimension = 2
+    w2 = get_cloud_location(img, dimension)
+    print, 'Applying cloud mask...'
+    for band = 0, nb-1 do begin
+      temp = img1.getData(bands=[band])
+      temp[w2] = masked_value
+      new_data[*, band, *] = temp
+    endfor
+  endif
+
+  if interleave1 eq 'bip' then begin
+    new_data = fltarr(nb, ns, nl) ; BIP
+    dimension = 1
+    w2 = get_cloud_location(img, dimension)
+    print, 'Applying cloud mask...'
+    for band = 0, nb-1 do begin
+      temp = img1.getData(bands=[band])
+      temp[w2] = masked_value
+      new_data[band, *, *] = temp
+    endfor
+  endif
+
+  return, new_data
+
+end
+
+function cloud_mask2, img1=img1, img2=img2, ns=ns, nl=nl, nb=nb, interleave1=interleave1, interleave2=interleave2
+
+  print, 'Reading image as array...'
+  e = ENVI()
+  masked_value = 0.0
+
+  ;  data = img1.getData()
+  ;  data2 = img2.getData()
+
+  if interleave1 eq 'bsq' then begin
+    dimension = 3
+  endif else if interleave1 eq 'bil' then begin
+    dimension = 2
+  endif else if interleave1 eq 'bip' then begin
+    dimension = 1
+  endif
+
+  print, 'dimension1 = ', dimension
+  print, 'interleave2 = ', interleave2
+
+  if interleave2 eq 'bsq' then begin
+    new_data = fltarr(ns, nl, nb) ; BSQ
+    w2 = get_cloud_location(img1, dimension)
+    print, 'Applying cloud mask...'
+    for band = 0, nb-1 do begin
+      ;      temp = data2[*, *, band]
+      temp = img2.getData(bands=[band])
+      temp[w2] = masked_value
+      new_data[*, *, band] = temp
+    endfor
+  endif
+
+  if interleave2 eq 'bil' then begin
+    new_data = fltarr(ns, nb, nl) ; BIL
+    w2 = get_cloud_location(img1, dimension)
+    print, 'Applying cloud mask...'
+    for band = 0, nb-1 do begin
+      ;      temp = data2[*, band, *]
+      temp = img2.getData(bands=[band])
+      temp[w2] = masked_value
+      new_data[*, band, *] = temp
+    endfor
+  endif
+
+  if interleave2 eq 'bip' then begin
+    new_data = fltarr(nb, ns, nl) ; BIP
+    w2 = get_cloud_location(img1, dimension)
+    print, 'Applying cloud mask...'
+    for band = 0, nb-1 do begin
+      ;      temp = data2[band, *, *]
+      temp = img2.getData(bands=[band])
+      temp[w2] = masked_value
+      new_data[band, *, *] = temp
+    endfor
+  endif
+
+  return, new_data
+
+end
+
+function get_cloud_location, img, dimension
+
+  print, 'Acquiring cloud location...'
+  e = ENVI()
+  visual = img.getData(bands=[0:44])
+  visual = mean(visual, dimension=dimension)
+
+  ht = histogram(visual, nbins=200, locations=locations)
+  ht_acc = total(ht, /cumulative) / n_elements(visual)
+  w = where(ht_acc ge 0.95)                 ;80%的累计区间
+  threshold = locations(w[0])
+  w2 = where(visual ge threshold)
+
+  ;  band1 = img.getData(bands=[0])
+  ;  w2 = where(band1 eq 0.0)
+
+  return, w2
+
+end
