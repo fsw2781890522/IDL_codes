@@ -81,6 +81,7 @@ pro china_satellites_batch_process_1
     rad.close
     bil.close
     fla.close
+    rmBBL.close
     ortho.close
     PCA.close
     MNF.close
@@ -159,14 +160,18 @@ function moment_matching, INPUT_RASTER, OUTPUT_RASTER_URI
     nl = INPUT_RASTER.nRows
     nb = INPUT_RASTER.nBands
     matched_data = fltarr(ns, nl, nb)
-    width = floor(ns / 6)
+    width = floor(ns / 1)
     if width mod 2 eq 0 then width = width - 1
     print, 'window width: ', width
     for band = 0, nb-1 do begin
       print, 'Processing band ', band + 1
-      data = float(reform(INPUT_RASTER.getData(bands=[band]), ns, nl))
-;      matched_data[*, *, band] = repair(data)
-      matched_data[*, *, band] = match(repair(data), width)
+      if band lt 76 then begin
+        matched_data[*, *, band] = float(reform(INPUT_RASTER.getData(bands=[band]), ns, nl))
+      endif else begin
+        data = float(reform(INPUT_RASTER.getData(bands=[band]), ns, nl))
+        ;      matched_data[*, *, band] = repair(data)
+        matched_data[*, *, band] = match(repair(data), width)
+      endelse     
     endfor
 
     matched_raster = ENVIRaster(matched_data, URI=OUTPUT_RASTER_URI, spatialRef=geo, metadata=meta, interleave='BSQ')
@@ -197,6 +202,7 @@ function match, arr, width
       offset = miu_ref - ((sigma_ref / sigma[j]) * miu[j])
       window[j, *] = gain * window[j, *] + offset
     endfor
+    arr[i-radius:i+radius, *] = window
   endfor
 
   return, arr
