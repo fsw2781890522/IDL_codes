@@ -11,6 +11,7 @@ pro china_satellites_batch_process_1
 ; [5] RPC Orthorectification
 ; [6] PCA Transformation
 ; [7] MNF Transformation
+; [8] Band Reduction (reduce to 20 bands)
 
   e = ENVI()
   sav_fn = "D:\SOFTWARE\ENVI57\ENVI57\extensions\ChinaSatellitesSupport\envi_china_satellites_support.sav"
@@ -20,7 +21,7 @@ pro china_satellites_batch_process_1
   out_dir = 'H:\20231207_Altyn\ZY1F_AHSI_processing2'
   
   steps = ['m', 'rad', 'bil', 'fla', 'cloud', 'water', 'rmBBL', $
-    'ortho', 'PCA', 'MNF']
+    'ortho', 'PCA', 'MNF', 'PCA_20', 'MNF_20']
   dirs = []
   forEach step, steps do begin
     dir = strcompress(out_dir + '\' + step, /remove_all)
@@ -33,19 +34,15 @@ pro china_satellites_batch_process_1
     endelse
   endforeach
   help, dirs
- 
-  fn_list = findXMLFiles(root_dir)
-  if n_elements(fn_list) eq 0 then begin
-    fn_list = file_search(root_dir, '*.{dat,img}')
-  endif
-  print, fn_list
+  
+  fn_list = get_fn_list(root_dir)
   
   for i = 0, n_elements(fn_list)-1 do begin
     
     start_time = systime(/seconds)
     
     fn = fn_list[i]
-    ext = '.' + (strsplit(fn, '.', /extract))[-1]
+    ext = get_ext(fn)
     print, ext
     basename = file_basename(fn, ext)
     base_str = strsplit(basename, '_', /extract)
@@ -55,7 +52,7 @@ pro china_satellites_batch_process_1
     fns = list()
     for j = 0, n_elements(dirs)-1 do begin
       dir = dirs[j]
-      postfix = '_' + steps[j] + '.dat'
+      postfix = '_' + steps[j] + '.img'
       fns.add, strcompress(dir + '\' + basename + postfix, /remove_all)
     endfor
     help, fns
@@ -77,6 +74,8 @@ pro china_satellites_batch_process_1
     ortho = AHSI_RPCOrtho(rmBBL, o_fn['ortho'], DEM_fn)
     PCA = PCA_Trans(ortho, o_fn['PCA'])
     MNF = MNF_Trans(ortho, o_fn['MNF'])
+    PCA_20 = band_reduction(PCA, o_fn['PCA_20'])
+    MNF_20 = band_reduction(MNF, o_fn['MNF_20'])
 
     rad.close
     bil.close
@@ -85,6 +84,8 @@ pro china_satellites_batch_process_1
     ortho.close
     PCA.close
     MNF.close
+    PCA_20.close
+    MNF_20.close
     
     end_time = systime(/seconds)
     seconds = end_time - start_time
@@ -94,6 +95,33 @@ pro china_satellites_batch_process_1
     print, strcompress('Consume:  ' + hours + 'h' + minutes + 'm' + seconds + 's')
     
   endfor
+
+end
+
+function get_fn_list, root_dir
+
+  fn_list = []
+  files = File_Search(root_dir + '/*', '*.{xml,dat,img}', count=count)
+  
+  for i = 0, count-1 do begin
+    file_path = files[i]
+    if (StrPos(files[i], 'Check')) eq -1 and (StrPos(files[i], 'describe')) eq -1 then begin
+      fn_list = [fn_list, files[i]]
+    endif
+  endfor
+  
+  if n_elements(fn_list) gt 0 then begin
+    return, fn_list
+  endif else begin
+    print, 'No standard ENVIRaster[*.dat/*.img] or [*.xml] file of China Satellites found.'
+    return, 0
+  endelse
+
+end
+
+function get_ext, fn
+
+  return, '.' + (strsplit(fn, '.', /extract))[-1]
 
 end
 
@@ -117,33 +145,6 @@ function read_raster, fn, sav_fn
     return, 0
   endelse
 
-end
-
-function FindXMLFiles, root_dir
-  ; 初始化一个字符串数组来存储找到的文件名
-  xml_files = []
-
-  ; 获取当前目录下的所有文件
-  files = File_Search(root_dir + '/*', '*.xml', COUNT=file_count)
-
-  ; 遍历当前目录下的所有文件
-  for i = 0, file_count-1 do begin
-    file_path = files[i]
-;    ext = strsplit(file_path, '.', /extract)
-;    print, ext
-;    ext = ext[-1]
-;    print, ext
-    ; 检查文件是否以 '.xml' 后缀结尾且文件名中不包含 'Check' 字符串
-    if (StrPos(files[i], 'Check')) eq -1 and (StrPos(files[i], 'describe')) eq -1then begin
-;      if (StrPos(files[i], 'MSS')) ne -1 or (StrPos(files[i], 'PAN')) ne -1 then begin
-      ; 添加符合条件的文件名到结果数组
-      xml_files = [xml_files, files[i]]
-;      endif
-    endif
-  endfor
-
-  ; 返回找到的XML文件名数组
-  return, xml_files
 end
 
 function moment_matching, INPUT_RASTER, OUTPUT_RASTER_URI
@@ -592,6 +593,8 @@ end
 
 function PCA_Trans, INPUT_RASTER, OUTPUT_RASTER_URI
 
+  print, 'PCA Transforming...'
+  
   e = ENVI()
   if file_test(OUTPUT_RASTER_URI) then begin
     return, e.openRaster(OUTPUT_RASTER_URI)
@@ -611,6 +614,8 @@ end
 
 function MNF_Trans, INPUT_RASTER, OUTPUT_RASTER_URI
 
+  print, 'MNF Transforming...'
+  
   e = ENVI()
   if file_test(OUTPUT_RASTER_URI) then begin
     return, e.openRaster(OUTPUT_RASTER_URI)
@@ -627,6 +632,38 @@ function MNF_Trans, INPUT_RASTER, OUTPUT_RASTER_URI
   endelse
   
 end
+
+function band_reduction, INPUT_RASTER, OUTPUT_RASTER_URI
+
+  print, 'Reducing to 20 bands...'
+  
+  e = ENVI()
+  if file_test(OUTPUT_RASTER_URI) then begin
+    return, e.openRaster(OUTPUT_RASTER_URI)
+  endif else begin
+    data = INPUT_RASTER.getData(bands=[0:19])
+    meta = INPUT_RASTER.metadata
+    geo = INPUT_RASTER.spatialRef
+    tags = meta.tags
+
+    new_meta = ENVIRasterMetadata()
+    forEach tag, tags do begin
+      field = tag
+      value = meta[tag]
+      if n_elements(value) eq 1 then begin
+        new_meta.addItem, field, value
+      endif else begin
+        new_meta.addItem, field, value[0:19]
+      endelse
+    endforeach
+    new_raster = ENVIRaster(data, URI=OUTPUT_RASTER_URI, spatialRef=geo, metadata=new_meta, interleave='BSQ')
+    new_raster.save
+    raster.close
+    return, new_raster
+  endelse
+
+end
+
 function PanSharpening, MSS, PAN, OUTPUT_RASTER_URI
 
   print, 'Applying Gram-Schmidt PanSharpening...'
