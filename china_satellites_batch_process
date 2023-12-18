@@ -98,9 +98,10 @@ pro china_satellites_batch_process_1
     ortho = AHSI_RPCOrtho(rmBBL, o_fn['ortho'], DEM_fn)
     
     PCA_total = PCA_Trans(ortho, o_fn['PCA_total'])
-    MNF_toal = MNF_Trans(ortho, o_fn['MNF_total'])
     PCA_total = e.openRaster(o_fn['PCA_total'])
     PCA_20 = band_reduction(PCA_total, o_fn['PCA_20'])
+    
+;    MNF_toal = MNF_Trans(ortho, o_fn['MNF_total'])    
 ;    MNF_total = e.openRaster(o_fn['MNF_total'])
 ;    MNF_20 = band_reduction(MNF_total, o_fn['MNF_20'])
 
@@ -120,11 +121,9 @@ pro china_satellites_batch_process_1
     forEach step, steps do begin
       img_url = o_fn[step]
       hdr_url = img_url.replace('img', 'hdr')
-      new_img_url = img_url.replace(work_dir, out_dir)
-      new_hdr_url = hdr_url.replace(work_dir, out_dir)
+      new_path = file_dirname(img_url.replace(work_dir, out_dir))
       if file_test(img_url) and file_test(hdr_url) then begin
-        file_move, img_url, new_img_url
-        file_move, hdr_url, new_hdr_url
+        file_move, [img_url, hdr_url], new_path
       endif
     endforeach
     print, 'Done'
@@ -551,17 +550,25 @@ function remove_Badband, INPUT_RASTER, OUTPUT_RASTER_URI
     fla_meta = INPUT_RASTER.metadata
     fla_geo = INPUT_RASTER.spatialRef
     interleave = INPUT_RASTER.interleave
+    nb = INPUT_RASTER.nBands
     tags = fla_meta.tags
-;    bbl = reform(fla_meta['BBL'], n_elements(fla_meta['BBL']))
-;    idx = where(bbl eq 1)
+    bbl = reform(fla_meta['BBL'], n_elements(fla_meta['BBL']))
     wl = reform(fla_meta['WAVELENGTH'], n_elements(fla_meta['WAVELENGTH']))
 ;    water absorption: 820, 940, 1135nm ; retrival: 775~865nm, 875~1015nm, 1055~1205nm
+
+    w1 = where(wl le 800, count1)
+    w2 = where(wl ge 840 and wl le 920, count2)
+    w3 = where(wl ge 960 and wl le 1115, count3)
+    w4 = where(wl ge 1155, count4)
+    GBL1 = where(bbl eq 1) ;  GBL: good band list
+    GBL2 = [w1, w2, w3, w4]
     idx = []
-    idx1 = where(wl le 800, count1)
-    idx2 = where(wl ge 840 and wl le 920, count2)
-    idx3 = where(wl ge 960 and wl le 1115, count3)
-    idx4 = where(wl ge 1155, count4)
-    idx = reform([idx1, idx2, idx3, idx4], count1+count2+count3+count4)
+    for b = 0, nb-1 do begin
+      if where(GBL1 eq b) ne -1 and where(GBL2 eq b) ne -1 then begin
+        idx = [idx, [b]]
+      endif
+    endfor
+    idx = reform(idx, n_elements(idx))
     help, idx
 
     rmBBL_meta = ENVIRasterMetadata()
