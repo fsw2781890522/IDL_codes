@@ -17,25 +17,38 @@ pro china_satellites_batch_process_1
   sav_fn = "D:\SOFTWARE\ENVI57\ENVI57\extensions\ChinaSatellitesSupport\envi_china_satellites_support.sav"
   DEM_fn = "D:\SOFTWARE\ENVI57\ENVI57\data\GMTED2010.jp2"
   
-  root_dir = 'H:\20231207_Altyn\ZY1F_AHSI'
-  out_dir = 'H:\20231207_Altyn\ZY1F_AHSI_processing2'
+  root_dir = 'H:\group_2_文件夹'
+  work_dir = 'F:\group_2_processing'
+  out_dir = 'H:\group_2_processing'
   
   steps = ['m', 'rad', 'bil', 'fla', 'cloud', 'water', 'rmBBL', $
-    'ortho', 'PCA', 'MNF', 'PCA_20', 'MNF_20']
+    'ortho', 'PCA_total', 'MNF_total', 'PCA_20', 'MNF_20']
   dirs = []
+  dirs2 = []
   forEach step, steps do begin
-    dir = strcompress(out_dir + '\' + step, /remove_all)
+    dir = strcompress(work_dir + '\' + step, /remove_all)
+    dir2 = strcompress(out_dir + '\' + step, /remove_all)
     dirs = [dirs, [dir]]
+    dirs2 = [dirs2, [dir2]]
     if file_test(dir) then begin
       print, 'outpath: ' + dir + ' already exists'
     endif else begin
       file_mkdir, dir
       print, 'outpath: ' + dir + ' has been created'
     endelse
+    
+    if file_test(dir2) then begin
+      print, 'outpath: ' + dir2 + ' already exists'
+    endif else begin
+      file_mkdir, dir2
+      print, 'outpath: ' + dir2 + ' has been created'
+    endelse
   endforeach
-  help, dirs
   
   fn_list = get_fn_list(root_dir)
+;  forEach fn, fn_list do begin
+;    print, fn
+;  endforeach
   
   for i = 0, n_elements(fn_list)-1 do begin
     
@@ -43,10 +56,10 @@ pro china_satellites_batch_process_1
     
     fn = fn_list[i]
     ext = get_ext(fn)
-    print, ext
+;    print, ext
     basename = file_basename(fn, ext)
     base_str = strsplit(basename, '_', /extract)
-    print, base_str
+;    print, base_str
     basename = strjoin(base_str[0:4], '_')
     
     fns = list()
@@ -57,35 +70,64 @@ pro china_satellites_batch_process_1
     endfor
     help, fns
     o_fn = hash(steps, fns)
-    help, o_fn
-    print, o_fn         
+       
     
-    if file_test(o_fn['MNF']) then continue
+    if file_test(o_fn['PCA_20']) then continue
     
     ;   ENVIOpenChinaRaster会自动识别卫星类型
     raster = read_raster(fn, sav_fn)
+    meta = raster.metadata
+    geo = raster.spatialRef
+    ns = raster.nColumns
+    nl = raster.nRows
+    nb = raster.nBands
     
-    m = moment_matching(raster, o_fn['m'])
+;    forEach tag, meta.tags do begin
+;      print, tag, '  ', meta[tag]
+;    endforeach
+    
+    
+    m = moment_matching(raster, o_fn['m'], width = floor(ns / 1))
     rad = AHSI_RadioCali(m, o_fn['rad'])
-    bil = AHSI_ConvertInterleave(rad, o_fn['bil'])
+    bil = AHSI_ConvertInterleave(rad, o_fn['bil'], 'BIL')
+    
     fla = AHSI_FLAASH(bil, o_fn['fla'], o_fn['cloud'], o_fn['water'])
     fla = e.openRaster(o_fn['fla'])
+    
     rmBBL = remove_BadBand(fla, o_fn['rmBBL'])
     ortho = AHSI_RPCOrtho(rmBBL, o_fn['ortho'], DEM_fn)
-    PCA = PCA_Trans(ortho, o_fn['PCA'])
-    MNF = MNF_Trans(ortho, o_fn['MNF'])
-    PCA_20 = band_reduction(PCA, o_fn['PCA_20'])
-    MNF_20 = band_reduction(MNF, o_fn['MNF_20'])
+    
+    PCA_total = PCA_Trans(ortho, o_fn['PCA_total'])
+    MNF_toal = MNF_Trans(ortho, o_fn['MNF_total'])
+    PCA_total = e.openRaster(o_fn['PCA_total'])
+    PCA_20 = band_reduction(PCA_total, o_fn['PCA_20'])
+;    MNF_total = e.openRaster(o_fn['MNF_total'])
+;    MNF_20 = band_reduction(MNF_total, o_fn['MNF_20'])
 
+    raster.close
+    m.close
     rad.close
     bil.close
     fla.close
     rmBBL.close
     ortho.close
-    PCA.close
-    MNF.close
+    PCA_total.close   
     PCA_20.close
-    MNF_20.close
+;    MNF_20.close
+;    MNF_total.close
+    
+    print, 'Moving files...'
+    forEach step, steps do begin
+      img_url = o_fn[step]
+      hdr_url = img_url.replace('img', 'hdr')
+      new_img_url = img_url.replace(work_dir, out_dir)
+      new_hdr_url = hdr_url.replace(work_dir, out_dir)
+      if file_test(img_url) and file_test(hdr_url) then begin
+        file_move, img_url, new_img_url
+        file_move, hdr_url, new_hdr_url
+      endif
+    endforeach
+    print, 'Done'
     
     end_time = systime(/seconds)
     seconds = end_time - start_time
@@ -147,7 +189,7 @@ function read_raster, fn, sav_fn
 
 end
 
-function moment_matching, INPUT_RASTER, OUTPUT_RASTER_URI
+function moment_matching, INPUT_RASTER, OUTPUT_RASTER_URI, width=width
 
   print, 'Moment matching and removing band lines...'
   
@@ -161,7 +203,6 @@ function moment_matching, INPUT_RASTER, OUTPUT_RASTER_URI
     nl = INPUT_RASTER.nRows
     nb = INPUT_RASTER.nBands
     matched_data = fltarr(ns, nl, nb)
-    width = floor(ns / 1)
     if width mod 2 eq 0 then width = width - 1
     print, 'window width: ', width
     for band = 0, nb-1 do begin
@@ -170,8 +211,8 @@ function moment_matching, INPUT_RASTER, OUTPUT_RASTER_URI
         matched_data[*, *, band] = float(reform(INPUT_RASTER.getData(bands=[band]), ns, nl))
       endif else begin
         data = float(reform(INPUT_RASTER.getData(bands=[band]), ns, nl))
-        ;      matched_data[*, *, band] = repair(data)
-        matched_data[*, *, band] = match(repair(data), width)
+;        matched_data[*, *, band] = match(repair(data), width)
+        matched_data[*, *, band] = match(data, width)
       endelse     
     endfor
 
@@ -355,7 +396,7 @@ function AHSI_RadioCali, INPUT_RASTER, OUTPUT_RASTER_URI
 
 end
 
-function AHSI_ConvertInterleave, INPUT_RASTER, OUTPUT_RASTER_URI
+function AHSI_ConvertInterleave, INPUT_RASTER, OUTPUT_RASTER_URI, interleave
 
   print, 'Converting interleave...'
   
@@ -367,7 +408,7 @@ function AHSI_ConvertInterleave, INPUT_RASTER, OUTPUT_RASTER_URI
     Task = ENVITask('ConvertInterleave')
     ;设置输入参数
     Task.INPUT_RASTER = INPUT_RASTER
-    Task.INTERLEAVE = 'BIL'
+    Task.INTERLEAVE = interleave
     Task.OUTPUT_RASTER_URI = OUTPUT_RASTER_URI
     ;执行Task
     Task.Execute
@@ -493,6 +534,12 @@ function AHSI_FLAASH, INPUT_RASTER, OUTPUT_RASTER_URI, CLOUD_RASTER_URI, WATER_R
   
 end
 
+function get_atmosModel, lat, time
+
+;  pass
+
+end
+
 function remove_Badband, INPUT_RASTER, OUTPUT_RASTER_URI
 
   print, 'Removing Bad Bands...'
@@ -505,8 +552,17 @@ function remove_Badband, INPUT_RASTER, OUTPUT_RASTER_URI
     fla_geo = INPUT_RASTER.spatialRef
     interleave = INPUT_RASTER.interleave
     tags = fla_meta.tags
-    bbl = reform(fla_meta['BBL'], n_elements(fla_meta['BBL']))
-    idx = where(bbl eq 1)
+;    bbl = reform(fla_meta['BBL'], n_elements(fla_meta['BBL']))
+;    idx = where(bbl eq 1)
+    wl = reform(fla_meta['WAVELENGTH'], n_elements(fla_meta['WAVELENGTH']))
+;    water absorption: 820, 940, 1135nm ; retrival: 775~865nm, 875~1015nm, 1055~1205nm
+    idx = []
+    idx1 = where(wl le 800, count1)
+    idx2 = where(wl ge 840 and wl le 920, count2)
+    idx3 = where(wl ge 960 and wl le 1115, count3)
+    idx4 = where(wl ge 1155, count4)
+    idx = reform([idx1, idx2, idx3, idx4], count1+count2+count3+count4)
+    help, idx
 
     rmBBL_meta = ENVIRasterMetadata()
     forEach tag, tags do begin
@@ -658,7 +714,6 @@ function band_reduction, INPUT_RASTER, OUTPUT_RASTER_URI
     endforeach
     new_raster = ENVIRaster(data, URI=OUTPUT_RASTER_URI, spatialRef=geo, metadata=new_meta, interleave='BSQ')
     new_raster.save
-    raster.close
     return, new_raster
   endelse
 
